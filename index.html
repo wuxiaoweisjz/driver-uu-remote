@@ -26,7 +26,8 @@
     <h1>UU AMF Bridge</h1>
     <p>Arch Linux Pacman repository for the UU Remote AMF encode and DXVA11 decode bridge.</p>
     <h2>配置仓库</h2>
-    <pre><code>sudo curl -o /etc/pacman.d/uu-amf-bridge.conf \
+    <pre><code>yay -S uuyc-wine
+sudo curl -o /etc/pacman.d/uu-amf-bridge.conf \
   https://wuxiaoweisjz.github.io/driver-uu-remote/uu-amf-bridge.conf
 echo 'Include = /etc/pacman.d/uu-amf-bridge.conf' | sudo tee -a /etc/pacman.conf
 sudo pacman -Syu uu-amf-bridge-git</code></pre>
