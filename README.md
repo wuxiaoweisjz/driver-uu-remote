@@ -19,16 +19,26 @@ parameters、slice 和输出纹理桥接到 Vulkan Video 解码。
 已验证组合：Wine Staging 11.14、UU 远程 4.33、AMD Renoir、Mesa 26.1.4，
 分辨率最高 3840x2160。H.265、10-bit 和 4:4:4 当前明确返回不支持。
 
-## AUR 安装
+## Arch Linux 安装
 
-发布后可使用任意 AUR helper：
+先通过任意 AUR helper 安装 UU Wine 客户端。安装 AUR 软件不需要 AUR 账户：
 
 ```sh
-yay -S uu-amf-bridge-git
+yay -S uuyc-wine
 ```
 
-该包依赖 AUR 中已有的 `uuyc-wine`，会由 AUR helper 一并安装；桥接仓库和
-桥接包本身不包含 UU 客户端二进制。
+添加本项目的 Pacman 仓库并安装桥接包：
+
+```sh
+sudo curl -o /etc/pacman.d/uu-amf-bridge.conf \
+  https://wuxiaoweisjz.github.io/driver-uu-remote/uu-amf-bridge.conf
+echo 'Include = /etc/pacman.d/uu-amf-bridge.conf' | sudo tee -a /etc/pacman.conf
+sudo pacman -Syu uu-amf-bridge-git
+```
+
+也可以从 [GitHub Releases](https://github.com/wuxiaoweisjz/driver-uu-remote/releases)
+下载 `.pkg.tar.zst` 后使用 `sudo pacman -U <package>` 安装。桥接仓库和桥接包
+本身不包含 UU 客户端二进制。
 
 完全退出 UU 后安装 app-local DLL 并启动用户服务：
 
