@@ -1,0 +1,47 @@
+# Maintainer: wuxiaoweisjz
+
+pkgname=uu-amf-bridge-git
+pkgver=r1.e2d5e24
+pkgrel=1
+pkgdesc='AMF encode and DXVA11 decode bridge for UU Remote under Wine on AMD GPUs'
+arch=('x86_64')
+url='https://github.com/wuxiaoweisjz/driver-uu-remote'
+license=('MIT')
+install=uu-amf-bridge.install
+depends=('bash' 'curl' 'ffmpeg' 'libarchive' 'systemd' 'uuyc-wine' 'vulkan-radeon' 'wine')
+makedepends=('git' 'pkgconf')
+provides=('uu-amf-bridge')
+conflicts=('uu-amf-bridge')
+source=("$pkgname::git+$url.git"
+        'dxvk-3.0.2.tar.gz::https://github.com/doitsujin/dxvk/releases/download/v3.0.2/dxvk-3.0.2.tar.gz')
+sha256sums=('SKIP'
+            '9c538924110a7cdef871ca36dee218c0774124374ffdeb38af4b76be55bdf7c2')
+
+pkgver() {
+    cd "$pkgname"
+    printf 'r%s.%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
+}
+
+build() {
+    cd "$pkgname"
+    make all
+}
+
+package() {
+    local bridge_dir="$pkgdir/usr/lib/uu-amf-bridge"
+    cd "$pkgname"
+
+    install -d "$bridge_dir/scripts" "$bridge_dir/packaging" "$pkgdir/usr/bin"
+    install -m755 build/uu-amf-helper "$bridge_dir/uu-amf-helper"
+    install -m644 build/amfrt64.dll build/d3d11.dll "$bridge_dir/"
+    install -m644 "$srcdir/dxvk-3.0.2/x64/d3d11.dll" "$bridge_dir/d3d11_dxvk.dll"
+    install -m644 "$srcdir/dxvk-3.0.2/x64/dxgi.dll" "$bridge_dir/dxgi.dll"
+    install -m755 scripts/common.sh scripts/install.sh scripts/uninstall.sh scripts/verify-uu.sh \
+        "$bridge_dir/scripts/"
+    install -m644 packaging/uu-amf-helper.service "$bridge_dir/packaging/"
+    ln -s ../lib/uu-amf-bridge/scripts/install.sh "$pkgdir/usr/bin/uu-amf-bridge-install"
+    ln -s ../lib/uu-amf-bridge/scripts/uninstall.sh "$pkgdir/usr/bin/uu-amf-bridge-uninstall"
+    ln -s ../lib/uu-amf-bridge/scripts/verify-uu.sh "$pkgdir/usr/bin/uu-amf-bridge-verify"
+    install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

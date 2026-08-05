@@ -1,0 +1,14 @@
+post_install() {
+    echo 'UU AMF bridge package installed.'
+    echo 'Exit UU completely, then run as your desktop user:'
+    echo '  uu-amf-bridge-install'
+}
+
+post_upgrade() {
+    echo 'UU AMF bridge package upgraded.'
+    echo 'Exit UU completely, then rerun uu-amf-bridge-install to deploy the new DLLs.'
+}
+
+pre_remove() {
+    echo 'Before removing this package, exit UU and run uu-amf-bridge-uninstall as the user who installed the bridge.'
+}

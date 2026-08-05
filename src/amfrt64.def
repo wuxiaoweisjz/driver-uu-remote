@@ -1,0 +1,5 @@
+LIBRARY amfrt64
+EXPORTS
+    AMFInit
+    AMFQueryVersion
+    UUInstallDxvaBridge=dxva_bridge_install

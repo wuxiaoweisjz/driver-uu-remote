@@ -1,0 +1,8 @@
+/build/
+/aur/pkg/
+/aur/src/
+/aur/*.pkg.tar.*
+/aur/uu-amf-bridge/
+*.log
+*.core
+/core

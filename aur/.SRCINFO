@@ -1,0 +1,26 @@
+pkgbase = uu-amf-bridge-git
+	pkgdesc = AMF encode and DXVA11 decode bridge for UU Remote under Wine on AMD GPUs
+	pkgver = r1.e2d5e24
+	pkgrel = 1
+	url = https://github.com/wuxiaoweisjz/driver-uu-remote
+	install = uu-amf-bridge.install
+	arch = x86_64
+	license = MIT
+	makedepends = git
+	makedepends = pkgconf
+	depends = bash
+	depends = curl
+	depends = ffmpeg
+	depends = libarchive
+	depends = systemd
+	depends = uuyc-wine
+	depends = vulkan-radeon
+	depends = wine
+	provides = uu-amf-bridge
+	conflicts = uu-amf-bridge
+	source = uu-amf-bridge-git::git+https://github.com/wuxiaoweisjz/driver-uu-remote.git
+	source = dxvk-3.0.2.tar.gz::https://github.com/doitsujin/dxvk/releases/download/v3.0.2/dxvk-3.0.2.tar.gz
+	sha256sums = SKIP
+	sha256sums = 9c538924110a7cdef871ca36dee218c0774124374ffdeb38af4b76be55bdf7c2
+
+pkgname = uu-amf-bridge-git
