@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>UU AMF Bridge - Arch Repository</title>
+  <style>
+    :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+    body { margin: 0; background: #f4f6f8; color: #172026; }
+    main { width: min(760px, calc(100% - 32px)); margin: 64px auto; }
+    h1 { margin: 0 0 12px; font-size: 32px; letter-spacing: 0; }
+    p { line-height: 1.6; }
+    code, pre { font-family: ui-monospace, monospace; }
+    pre { overflow-x: auto; padding: 16px; border: 1px solid #ccd3d8; border-radius: 6px; background: #fff; }
+    .notice { padding-left: 12px; border-left: 4px solid #c47a12; }
+    a { color: #087f5b; }
+    @media (prefers-color-scheme: dark) {
+      body { background: #111517; color: #e8ecef; }
+      pre { background: #191f22; border-color: #3b464c; }
+      a { color: #63d3ad; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>UU AMF Bridge</h1>
+    <p>Arch Linux Pacman repository for the UU Remote AMF encode and DXVA11 decode bridge.</p>
+    <h2>配置仓库</h2>
+    <pre><code>sudo curl -o /etc/pacman.d/uu-amf-bridge.conf \
+  https://wuxiaoweisjz.github.io/driver-uu-remote/uu-amf-bridge.conf
+echo 'Include = /etc/pacman.d/uu-amf-bridge.conf' | sudo tee -a /etc/pacman.conf
+sudo pacman -Syu uu-amf-bridge-git</code></pre>
+    <p>完全退出 UU 后，以桌面用户运行：</p>
+    <pre><code>uu-amf-bridge-install</code></pre>
+    <p class="notice">当前仓库通过 HTTPS 分发，但尚未使用独立 GPG 密钥签名。</p>
+    <p><a href="https://github.com/wuxiaoweisjz/driver-uu-remote">源码与文档</a> · <a href="https://github.com/wuxiaoweisjz/driver-uu-remote/releases">Releases</a></p>
+  </main>
+</body>
+</html>
