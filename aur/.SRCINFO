@@ -6,6 +6,7 @@ pkgbase = uu-amf-bridge-git
 	install = uu-amf-bridge.install
 	arch = x86_64
 	license = MIT
+	license = Zlib
 	makedepends = git
 	makedepends = pkgconf
 	depends = bash

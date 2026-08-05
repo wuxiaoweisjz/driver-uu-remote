@@ -6,7 +6,7 @@ pkgrel=1
 pkgdesc='AMF encode and DXVA11 decode bridge for UU Remote under Wine on AMD GPUs'
 arch=('x86_64')
 url='https://github.com/wuxiaoweisjz/driver-uu-remote'
-license=('MIT')
+license=('MIT' 'Zlib')
 install=uu-amf-bridge.install
 depends=('bash' 'curl' 'ffmpeg' 'libarchive' 'systemd' 'uuyc-wine' 'vulkan-radeon' 'wine')
 makedepends=('git' 'pkgconf')
@@ -44,4 +44,6 @@ package() {
     ln -s ../lib/uu-amf-bridge/scripts/verify-uu.sh "$pkgdir/usr/bin/uu-amf-bridge-verify"
     install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 third_party/DXVK-LICENSE.txt \
+        "$pkgdir/usr/share/licenses/$pkgname/DXVK-LICENSE.txt"
 }

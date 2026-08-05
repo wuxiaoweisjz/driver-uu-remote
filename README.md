@@ -140,4 +140,5 @@ UU streamer.dll
 ## 许可证
 
 项目代码使用 MIT License。`third_party/AMF` 保留 AMD 上游许可证；DXVK 在
-构建时从其官方 release 获取，并遵循其自身许可证。
+构建时从其官方 release 获取，其 zlib 许可保存在
+`third_party/DXVK-LICENSE.txt` 并随二进制包安装。
