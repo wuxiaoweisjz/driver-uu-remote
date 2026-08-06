@@ -10,10 +10,7 @@ config_home=${XDG_CONFIG_HOME:-$HOME/.config}
 state_home=${XDG_STATE_HOME:-$HOME/.local/state}
 state_dir=$state_home/uu-amf-bridge
 
-if pgrep -f '[G]ameViewer(Server|Healthd|Service|Launcher)\.exe|[S]treamerCodecDetector\.exe' >/dev/null; then
-    printf 'UU is running. Stop it before uninstalling.\n' >&2
-    exit 1
-fi
+uu_bridge_assert_stopped
 systemctl --user disable --now uu-amf-helper.service 2>/dev/null || true
 
 for name in amfrt64.dll d3d11.dll d3d11_dxvk.dll dxgi.dll; do

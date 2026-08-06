@@ -34,7 +34,7 @@ int main(int argc, char **argv)
     FILE *file;
     uint8_t *data;
     long file_size;
-    int32_t enabled;
+    HelperInitReply init_reply;
     int fd;
     unsigned long port = 47891;
     if (argc != 2 && argc != 3) return 2;
@@ -55,8 +55,10 @@ int main(int argc, char **argv)
     if (fd < 0 || connect(fd, (struct sockaddr *)&address, sizeof(address)) < 0) return 6;
     init.magic = HELPER_MAGIC;
     init.type = HELPER_DECODER_INIT;
+    init.reserved = HELPER_PROTOCOL_VERSION;
     if (transfer_all(fd, &init, sizeof(init), 1) < 0 ||
-        transfer_all(fd, &enabled, sizeof(enabled), 0) < 0 || !enabled) return 7;
+        transfer_all(fd, &init_reply, sizeof(init_reply), 0) < 0 ||
+        !init_reply.enabled || init_reply.protocol_version != HELPER_PROTOCOL_VERSION) return 7;
     packet.magic = HELPER_MAGIC;
     packet.type = HELPER_DECODE_PACKET;
     packet.payload_size = (uint32_t)file_size;

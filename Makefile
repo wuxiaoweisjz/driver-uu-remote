@@ -19,7 +19,7 @@ all: $(BUILD_DIR)/amfrt64.dll $(BUILD_DIR)/d3d11.dll $(BUILD_DIR)/uu-amf-helper 
 $(BUILD_DIR):
 	mkdir -p $@
 
-$(BUILD_DIR)/amfrt_bridge.pe.o: src/amfrt_bridge.c | $(BUILD_DIR)
+$(BUILD_DIR)/amfrt_bridge.pe.o: src/amfrt_bridge.c src/helper_protocol.h | $(BUILD_DIR)
 	$(PE_CC) $(PE_CFLAGS) -c -o $@ $<
 	objcopy --remove-section=.comment --remove-section=.note.gnu.property $@
 

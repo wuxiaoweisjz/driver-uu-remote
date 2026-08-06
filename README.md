@@ -47,7 +47,8 @@ uu-amf-bridge-install
 ```
 
 安装器会自动查找常见的 UU Wine prefix，备份已有 DLL，并安装固定校验版本的
-DXVK。它不会替换 Wine `system32` 中的 DLL。
+DXVK。它不会替换 Wine `system32` 中的 DLL，也会拒绝在 UU 主程序、服务端或
+硬件探测器仍在运行时替换 app-local DLL。
 
 ## 源码构建
 
@@ -115,7 +116,8 @@ UU_DEVICE_ID=<device-id> UU_ADAPTER_ID=<adapter-id> uu-amf-bridge-verify
 ```
 
 验证成功时，AMF 编码和 DXVA11 解码都会报告 H.264 8-bit 4:2:0 hardware
-support。升级 UU、Wine、Mesa 或 DXVK 后应重新验证。
+support。验证器还会确认正在验证的 DLL 与当前构建或已安装软件包完全一致。
+升级 UU、Wine、Mesa 或 DXVK 后应重新安装并验证。
 
 ## 回滚
 
@@ -138,6 +140,10 @@ UU streamer.dll
 ```
 
 - helper 仅监听 loopback；协议没有认证，不应暴露到局域网。
+- DLL 与 helper 使用带版本号的握手；混用不同协议版本时硬件能力探测会失败，
+  不会进入半初始化状态。
+- helper 的收发操作有 5 秒上限；helper 卡死或退出时编解码调用会失败返回并在
+  后续初始化时重试，避免长期阻塞 UU 的图形线程。
 - D3D11 与 helper 之间目前经过 CPU 映射，硬编和硬解各有一次内存拷贝。
 - “原画”仍受 UU 自身网络自适应控制，高丢包时可能独立降档。
 - 这是第三方兼容项目，与网易、UU 或 AMD 无隶属关系。

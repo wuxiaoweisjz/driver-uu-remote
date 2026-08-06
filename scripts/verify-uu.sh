@@ -11,6 +11,19 @@ adapter_id=${UU_ADAPTER_ID:-}
 output_dir=$(mktemp -d)
 trap 'rm -rf -- "$output_dir"' EXIT
 
+if uu_bridge_is_running; then
+    printf 'UU is running; verification would reuse loaded DLLs. Exit UU completely first.\n' >&2
+    exit 1
+fi
+
+artifact_dir=$(uu_bridge_artifact_dir "$(uu_bridge_project_dir)")
+for name in amfrt64.dll d3d11.dll; do
+    cmp -s "$artifact_dir/$name" "$uu_bin/$name" || {
+        printf '%s does not match the packaged bridge. Rerun uu-amf-bridge-install.\n' "$uu_bin/$name" >&2
+        exit 1
+    }
+done
+
 systemctl --user is-active --quiet uu-amf-helper.service || {
     printf 'uu-amf-helper.service is not running.\n' >&2
     exit 1

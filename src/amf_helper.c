@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 #include <libavcodec/avcodec.h>
@@ -292,15 +293,16 @@ static void handle_client(int client)
     HelperInitMessage init_message;
     EncoderState encoder = {0};
     DecoderState decoder = {0};
-    int32_t enabled;
+    HelperInitReply init_reply = {0, HELPER_PROTOCOL_VERSION};
     int receive_result;
     receive_result = recv_all(client, &init_message, sizeof(init_message));
     if (receive_result <= 0 || init_message.magic != HELPER_MAGIC ||
+        init_message.reserved != HELPER_PROTOCOL_VERSION ||
         (init_message.type != HELPER_INIT && init_message.type != HELPER_DECODER_INIT)) return;
-    enabled = init_message.type == HELPER_INIT
+    init_reply.enabled = init_message.type == HELPER_INIT
         ? encoder_init(&encoder, &init_message) == 0
         : decoder_init(&decoder) == 0;
-    if (send_all(client, &enabled, sizeof(enabled)) < 0 || !enabled) goto done;
+    if (send_all(client, &init_reply, sizeof(init_reply)) < 0 || !init_reply.enabled) goto done;
     for (;;) {
         HelperFrameMessage frame_message;
         HelperReply reply = {HELPER_MAGIC, HELPER_REPLY, 0, 0, 0, 0};
@@ -367,7 +369,10 @@ int main(int argc, char **argv)
     for (;;) {
         int client = accept(server, NULL, NULL);
         pthread_t thread;
+        struct timeval timeout = {5, 0};
         if (client < 0) { if (errno == EINTR) continue; perror("accept"); break; }
+        setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+        setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
         if (pthread_create(&thread, NULL, client_thread, (void *)(intptr_t)client) != 0) {
             close(client);
             continue;

@@ -22,10 +22,7 @@ for artifact in "$artifact_dir/amfrt64.dll" "$artifact_dir/d3d11.dll" "$artifact
     test -f "$artifact" || { printf 'Missing %s; run make first.\n' "$artifact" >&2; exit 1; }
 done
 test -d "$uu_bin" || { printf 'UU bin directory not found: %s\n' "$uu_bin" >&2; exit 1; }
-if pgrep -f '[G]ameViewer(Server|Healthd|Service|Launcher)\.exe|[S]treamerCodecDetector\.exe' >/dev/null; then
-    printf 'UU is running. Stop it before installing.\n' >&2
-    exit 1
-fi
+uu_bridge_assert_stopped
 
 mkdir -p "$backup_dir" "$libexec_dir" "$unit_dir"
 temp_dir=$(mktemp -d)

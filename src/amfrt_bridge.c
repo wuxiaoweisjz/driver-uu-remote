@@ -30,6 +30,7 @@
 #define BRIDGE_MAX_PROPERTIES 64
 #define BRIDGE_MAX_OUTPUTS 8
 #define AMF_TIME_BASE 10000000LL
+#define HELPER_IO_TIMEOUT_MS 5000
 
 typedef struct BridgeProperty {
     wchar_t *name;
@@ -235,6 +236,13 @@ static int socket_recv_all(SOCKET socket_handle, void *data, size_t size)
         size -= received;
     }
     return 1;
+}
+
+static void socket_configure_timeouts(SOCKET socket_handle)
+{
+    DWORD timeout = HELPER_IO_TIMEOUT_MS;
+    setsockopt(socket_handle, SOL_SOCKET, SO_RCVTIMEO, (const char *)&timeout, sizeof(timeout));
+    setsockopt(socket_handle, SOL_SOCKET, SO_SNDTIMEO, (const char *)&timeout, sizeof(timeout));
 }
 #endif
 
@@ -743,12 +751,13 @@ static AMF_RESULT AMF_STD_CALL component_init(AMFComponent *iface, AMF_SURFACE_F
     AMFRate default_rate = {30, 1};
     AMFRate rate;
     amf_int64 bitrate;
-    int enable = 1;
+    HelperInitReply init_reply = {0};
     if (component->initialized) return AMF_ALREADY_INITIALIZED;
     if (format != AMF_SURFACE_NV12 || width < 128 || height < 128) return AMF_SURFACE_FORMAT_NOT_SUPPORTED;
     if (component->helper == INVALID_SOCKET) {
         component->helper = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
         if (component->helper == INVALID_SOCKET) return AMF_ENCODER_NOT_PRESENT;
+        socket_configure_timeouts(component->helper);
         memset(&address, 0, sizeof(address));
         address.sin_family = AF_INET;
         address.sin_port = htons((u_short)port);
@@ -764,13 +773,16 @@ static AMF_RESULT AMF_STD_CALL component_init(AMFComponent *iface, AMF_SURFACE_F
     memset(&init_message, 0, sizeof(init_message));
     init_message.magic = HELPER_MAGIC;
     init_message.type = HELPER_INIT;
+    init_message.reserved = HELPER_PROTOCOL_VERSION;
     init_message.width = width;
     init_message.height = height;
     init_message.format = AMF_SURFACE_NV12;
     init_message.bitrate = bitrate;
     init_message.fps_num = rate.num > 0 ? (uint32_t)rate.num : 30;
     init_message.fps_den = rate.den > 0 ? (uint32_t)rate.den : 1;
-    if (!socket_send_all(component->helper, &init_message, sizeof(init_message)) || !socket_recv_all(component->helper, &enable, sizeof(enable)) || !enable) {
+    if (!socket_send_all(component->helper, &init_message, sizeof(init_message)) ||
+        !socket_recv_all(component->helper, &init_reply, sizeof(init_reply)) ||
+        !init_reply.enabled || init_reply.protocol_version != HELPER_PROTOCOL_VERSION) {
         component_close_codec(component);
         return AMF_ENCODER_NOT_PRESENT;
     }
@@ -999,7 +1011,9 @@ static AMF_RESULT AMF_STD_CALL component_submit(AMFComponent *iface, AMFData *da
     header.duration = surface->duration;
     if (!socket_send_all(component->helper, &header, sizeof(header)) || !socket_send_all(component->helper, frame_data, frame_size) || !socket_recv_all(component->helper, &reply, sizeof(reply)) || reply.magic != HELPER_MAGIC || reply.type != HELPER_REPLY || reply.status != 0) {
         free(frame_data);
-        bridge_log("error", "helper rejected NV12 frame");
+        bridge_log("error", "helper rejected or timed out on NV12 frame");
+        component_close_codec(component);
+        component->initialized = 0;
         return AMF_FAIL;
     }
     free(frame_data);

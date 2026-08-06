@@ -72,3 +72,13 @@ uu_bridge_artifact_dir() {
 
     uu_bridge_die 'bridge artifacts not found; run make or install the Arch package.'
 }
+
+uu_bridge_is_running() {
+    pgrep -f '(^|[/\\])(GameViewer|GameViewerServer|GameViewerHealthd|GameViewerService|GameViewerLauncher|StreamerCodecDetector)\.exe([[:space:]]|$)' >/dev/null
+}
+
+uu_bridge_assert_stopped() {
+    if uu_bridge_is_running; then
+        uu_bridge_die 'UU is running. Exit the main window and tray process before changing bridge DLLs.'
+    fi
+}

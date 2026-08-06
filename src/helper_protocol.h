@@ -9,6 +9,7 @@
 #define HELPER_REPLY 3u
 #define HELPER_DECODER_INIT 4u
 #define HELPER_DECODE_PACKET 5u
+#define HELPER_PROTOCOL_VERSION 2u
 #define HELPER_DEFAULT_PORT 47890u
 
 #pragma pack(push, 1)
@@ -32,6 +33,11 @@ typedef struct HelperFrameMessage {
     int64_t pts;
     int64_t duration;
 } HelperFrameMessage;
+
+typedef struct HelperInitReply {
+    int32_t enabled;
+    uint32_t protocol_version;
+} HelperInitReply;
 
 typedef struct HelperReply {
     uint32_t magic;

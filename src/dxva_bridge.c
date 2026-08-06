@@ -14,7 +14,9 @@
 #include "helper_protocol.h"
 
 #define DXVA_BUFFER_COUNT 9
-#define DXVA_RUNTIME_COUNT 16
+#define DXVA_RUNTIME_COUNT 64
+#define HELPER_IO_TIMEOUT_MS 5000
+#define HELPER_PROBE_CACHE_MS 10000
 
 typedef struct DxvaRuntime DxvaRuntime;
 
@@ -61,6 +63,8 @@ static DxvaRuntime runtimes[DXVA_RUNTIME_COUNT];
 static LONG runtime_count;
 static LONG runtime_lock;
 static LONG module_pinned;
+static LONG helper_probe_result;
+static ULONGLONG helper_probe_time;
 
 static DxvaRuntime *runtime_from_device(ID3D11Device *device)
 {
@@ -280,24 +284,69 @@ static unsigned short helper_port(void)
     return (unsigned short)value;
 }
 
+static void configure_socket_timeouts(SOCKET socket_handle)
+{
+    DWORD timeout = HELPER_IO_TIMEOUT_MS;
+    setsockopt(socket_handle, SOL_SOCKET, SO_RCVTIMEO, (const char *)&timeout, sizeof(timeout));
+    setsockopt(socket_handle, SOL_SOCKET, SO_SNDTIMEO, (const char *)&timeout, sizeof(timeout));
+}
+
+static int helper_handshake(SOCKET socket_handle, uint32_t type)
+{
+    HelperInitMessage init;
+    HelperInitReply reply;
+    memset(&init, 0, sizeof(init));
+    init.magic = HELPER_MAGIC;
+    init.type = type;
+    init.reserved = HELPER_PROTOCOL_VERSION;
+    memset(&reply, 0, sizeof(reply));
+    return send_all(socket_handle, &init, sizeof(init)) &&
+           recv_all(socket_handle, &reply, sizeof(reply)) && reply.enabled &&
+           reply.protocol_version == HELPER_PROTOCOL_VERSION;
+}
+
+static int helper_available(void)
+{
+    struct sockaddr_in address;
+    SOCKET socket_handle;
+    ULONGLONG now = GetTickCount64();
+    LONG cached = InterlockedCompareExchange(&helper_probe_result, 0, 0);
+    if (helper_probe_time && now - helper_probe_time < HELPER_PROBE_CACHE_MS) return cached > 0;
+    socket_handle = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (socket_handle == INVALID_SOCKET) goto unavailable;
+    configure_socket_timeouts(socket_handle);
+    memset(&address, 0, sizeof(address));
+    address.sin_family = AF_INET;
+    address.sin_port = htons(helper_port());
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (connect(socket_handle, (struct sockaddr *)&address, sizeof(address)) == SOCKET_ERROR ||
+        !helper_handshake(socket_handle, HELPER_DECODER_INIT)) {
+        closesocket(socket_handle);
+        goto unavailable;
+    }
+    closesocket(socket_handle);
+    InterlockedExchange(&helper_probe_result, 1);
+    helper_probe_time = now;
+    return 1;
+unavailable:
+    InterlockedExchange(&helper_probe_result, -1);
+    helper_probe_time = now;
+    return 0;
+}
+
 static int decoder_connect(BridgeDecoder *decoder)
 {
     struct sockaddr_in address;
-    HelperInitMessage init;
-    int32_t enabled = 0;
     if (decoder->helper != INVALID_SOCKET) return 1;
     decoder->helper = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (decoder->helper == INVALID_SOCKET) return 0;
+    configure_socket_timeouts(decoder->helper);
     memset(&address, 0, sizeof(address));
     address.sin_family = AF_INET;
     address.sin_port = htons(helper_port());
     address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     if (connect(decoder->helper, (struct sockaddr *)&address, sizeof(address)) == SOCKET_ERROR) goto fail;
-    memset(&init, 0, sizeof(init));
-    init.magic = HELPER_MAGIC;
-    init.type = HELPER_DECODER_INIT;
-    if (!send_all(decoder->helper, &init, sizeof(init)) ||
-        !recv_all(decoder->helper, &enabled, sizeof(enabled)) || !enabled) goto fail;
+    if (!helper_handshake(decoder->helper, HELPER_DECODER_INIT)) goto fail;
     return 1;
 fail:
     closesocket(decoder->helper);
@@ -471,7 +520,7 @@ static HRESULT STDMETHODCALLTYPE video_create_output(ID3D11VideoDevice *iface, I
 }
 
 static UINT STDMETHODCALLTYPE video_profile_count(ID3D11VideoDevice *iface)
-{ (void)iface; return 1; }
+{ (void)iface; return helper_available() ? 1 : 0; }
 static HRESULT STDMETHODCALLTYPE video_profile(ID3D11VideoDevice *iface, UINT index, GUID *profile)
 {
     (void)iface;
@@ -485,7 +534,8 @@ static HRESULT STDMETHODCALLTYPE video_check_format(ID3D11VideoDevice *iface, co
 {
     (void)iface;
     if (!profile || !supported) return E_POINTER;
-    *supported = guid_is(profile, &D3D11_DECODER_PROFILE_H264_VLD_NOFGT) && format == DXGI_FORMAT_NV12;
+    *supported = helper_available() &&
+        guid_is(profile, &D3D11_DECODER_PROFILE_H264_VLD_NOFGT) && format == DXGI_FORMAT_NV12;
     return S_OK;
 }
 static HRESULT STDMETHODCALLTYPE video_config_count(ID3D11VideoDevice *iface,
@@ -493,7 +543,8 @@ static HRESULT STDMETHODCALLTYPE video_config_count(ID3D11VideoDevice *iface,
 {
     (void)iface;
     if (!desc || !count) return E_POINTER;
-    *count = guid_is(&desc->Guid, &D3D11_DECODER_PROFILE_H264_VLD_NOFGT) &&
+    *count = helper_available() &&
+             guid_is(&desc->Guid, &D3D11_DECODER_PROFILE_H264_VLD_NOFGT) &&
              desc->OutputFormat == DXGI_FORMAT_NV12 ? 1 : 0;
     return S_OK;
 }
@@ -655,13 +706,18 @@ static HRESULT STDMETHODCALLTYPE context_end_frame(ID3D11VideoContext *iface,
         uint64_t expected = (uint64_t)reply.width * reply.height * 3 / 2;
         if (expected != reply.payload_size || reply.payload_size > 128u * 1024u * 1024u) {
             hr = E_FAIL;
-            goto done;
+            goto disconnect;
         }
         frame = malloc(reply.payload_size);
         if (!frame) { hr = E_OUTOFMEMORY; goto done; }
-        if (!recv_all(decoder->helper, frame, reply.payload_size)) { hr = E_FAIL; goto done; }
+        if (!recv_all(decoder->helper, frame, reply.payload_size)) { hr = E_FAIL; goto disconnect; }
         hr = upload_nv12(decoder, frame, reply.width, reply.height);
+        if (FAILED(hr)) goto disconnect;
     }
+    goto done;
+disconnect:
+    closesocket(decoder->helper);
+    decoder->helper = INVALID_SOCKET;
 done:
     free(frame);
     LeaveCriticalSection(&decoder->lock);
