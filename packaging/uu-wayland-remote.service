@@ -1,0 +1,17 @@
+[Unit]
+Description=UU Remote on the native Wayland desktop
+Requires=uu-wayland-capture.service
+Wants=uu-amf-helper.service
+After=uu-wayland-capture.service uu-amf-helper.service graphical-session.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=%h/.local/libexec/uu-wayland-capture-helper --wait-ready 47892 120
+ExecStart=%h/.local/libexec/uu-wayland-run /usr/bin/uuyc-wine
+ExecStop=/usr/bin/uuyc-wine --stop
+TimeoutStartSec=120
+TimeoutStopSec=25
+
+[Install]
+WantedBy=graphical-session.target

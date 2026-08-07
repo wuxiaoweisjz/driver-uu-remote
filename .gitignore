@@ -6,3 +6,4 @@
 *.log
 *.core
 /core
+/reverse/

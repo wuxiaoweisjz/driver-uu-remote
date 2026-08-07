@@ -3,6 +3,8 @@
 #include <d3d11.h>
 #include <dxgi.h>
 
+#include "wayland_capture_hook.h"
+
 typedef HRESULT (STDMETHODCALLTYPE *CreateDeviceFn)(
     IDXGIAdapter *, D3D_DRIVER_TYPE, HMODULE, UINT,
     const D3D_FEATURE_LEVEL *, UINT, UINT, ID3D11Device **,
@@ -20,6 +22,11 @@ typedef HRESULT (STDMETHODCALLTYPE *On12CreateDeviceFn)(
 typedef HRESULT (*InstallBridgeFn)(ID3D11Device *, ID3D11DeviceContext *);
 
 static HMODULE dxvk_module;
+
+static DWORD WINAPI wayland_capture_thread(void *opaque)
+{
+    return uu_wayland_capture_hook_thread(opaque);
+}
 
 static FARPROC dxvk_proc(const char *name)
 {
@@ -103,5 +110,19 @@ HRESULT STDMETHODCALLTYPE D3D11On12CreateDevice(
     return hr;
 }
 
+BOOL WINAPI UUInstallWaylandCaptureHook(void)
+{
+    return uu_install_wayland_capture_hook(GetModuleHandleW(NULL));
+}
+
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved)
-{ (void)instance; (void)reason; (void)reserved; return TRUE; }
+{
+    WCHAR wayland[2];
+    (void)reserved;
+    if (reason == DLL_PROCESS_ATTACH) {
+        DisableThreadLibraryCalls(instance);
+        if (GetEnvironmentVariableW(L"WAYLAND_DISPLAY", wayland, 2) > 0)
+            CloseHandle(CreateThread(NULL, 0, wayland_capture_thread, NULL, 0, NULL));
+    }
+    return TRUE;
+}

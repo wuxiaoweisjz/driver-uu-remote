@@ -1,0 +1,4 @@
+LIBRARY streamer
+EXPORTS
+    RunCapture
+    RunInput

@@ -1,0 +1,14 @@
+[Unit]
+Description=UU Remote Wayland desktop capture bridge
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/libexec/uu-wayland-run %h/.local/libexec/uu-wayland-capture-helper 47892
+Restart=on-failure
+RestartSec=2
+Environment=QT_QPA_PLATFORM=wayland
+
+[Install]
+WantedBy=graphical-session.target

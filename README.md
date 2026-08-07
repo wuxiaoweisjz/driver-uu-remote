@@ -4,6 +4,10 @@
 `streamer.dll` 所需的 Windows `amfrt64.dll` ABI，并通过 Linux helper 将
 D3D11 NV12 帧交给 Mesa RADV Vulkan Video。DXVA11 兼容层则把 H.264 picture
 parameters、slice 和输出纹理桥接到 Vulkan Video 解码。
+Wine Wayland 下的桌面采集与输入通过 app-local `d3d11.dll` 修补
+`streamer.dll` 的 `GDI32!BitBlt` 和 `USER32!SendInput` 导入：画面从
+ScreenCast Portal/PipeWire 取得，键盘和鼠标事件通过仅监听 loopback 的 helper
+在 Plasma 下转为 KWin EIS 事件，其他桌面则回退到 Linux `/dev/uinput`。
 
 本项目不包含或修改 UU 的认证、信令、传输协议和客户端文件，也不绕过账号或
 会员限制。
@@ -48,14 +52,30 @@ uu-amf-bridge-install
 
 安装器会自动查找常见的 UU Wine prefix，备份已有 DLL，并安装固定校验版本的
 DXVK。它不会替换 Wine `system32` 中的 DLL，也会拒绝在 UU 主程序、服务端或
-硬件探测器仍在运行时替换 app-local DLL。
+硬件探测器仍在运行时替换 app-local DLL。安装器会把该 Wine prefix 的图形驱动
+默认设置为 Wayland，并启动 Portal/PipeWire 桌面采集桥。首次运行时必须在已解锁
+的本机 Wayland 桌面批准系统的屏幕共享请求；授权会由 Portal 持久保存，capture
+helper 或系统重启后自动恢复并轮换 restore token。UU 会等到首帧可用后再启动。
+卸载时会恢复原来的图形驱动配置。
+
+需要回退到独立 X11 桌面时运行：
+
+```sh
+UU_REMOTE_BACKEND=x11 uu-amf-bridge-install
+```
+
+X11 模式会启动或复用 `:99`，并让 UU 主程序、后台服务和会话守护统一运行在该
+显示上。切回 Wayland 使用 `UU_REMOTE_BACKEND=wayland uu-amf-bridge-install`。
 
 ## 源码构建
 
-安装构建依赖：
+安装构建、Wayland Portal 和 X11 回退依赖：
 
 ```sh
-sudo pacman -S --needed base-devel ffmpeg libarchive mesa pkgconf vulkan-radeon wine-staging
+sudo pacman -S --needed base-devel ffmpeg libarchive mesa pkgconf vulkan-radeon \
+  wine-staging qt6-base pipewire gst-plugin-pipewire gst-plugins-base-libs \
+  libei xdg-desktop-portal xdg-desktop-portal-kde \
+  xorg-server-xvfb kwin plasma-workspace
 ```
 
 构建并检查主机 Vulkan Video 能力：
@@ -71,6 +91,7 @@ make smoke
 - `build/amfrt64.dll`: AMF ABI 和编码桥
 - `build/d3d11.dll`: DXVK 代理及 DXVA11 注入入口
 - `build/uu-amf-helper`: 本机 Vulkan Video helper
+- `build/uu-wayland-capture-helper`: Portal/PipeWire 桌面采集 helper
 - `build/amf_pe_smoke.exe`: Wine 端编码/解码 smoke test
 
 源码安装同样要求先完全退出 UU：
@@ -78,6 +99,10 @@ make smoke
 ```sh
 ./scripts/install.sh
 ```
+
+重复安装或升级时，安装器会先正常停止当前后端的 remote 和 session guard 服务，
+部署完成后再自动启动；若另有手工启动的 UU 进程，安装器仍会拒绝替换正在使用的
+DLL。
 
 ## 路径配置
 
@@ -106,7 +131,40 @@ UU_WINEPREFIX=/path/to/wineprefix uu-amf-bridge-install
 ```sh
 systemctl --user status uu-amf-helper.service
 journalctl --user -u uu-amf-helper.service -n 50
+systemctl --user status uu-wayland-capture.service
+journalctl --user -u uu-wayland-capture.service -n 50
 ```
+
+Wayland 模式启用 `uu-wayland-session-guard.service`，X11 模式启用
+`uu-session-guard.service`。它们按 Wine 前缀监控 UU 的
+`GameViewer.exe`、`GameViewerServer.exe` 和 `GameViewerHealthd.exe`：主客户端
+退出而 WebView2 残留时自动回收孤儿会话；主客户端仍在运行但后台服务意外退出时
+以当前图形后端拉起后台服务，避免设备在远端显示为离线。守护进程不会触碰
+其他 Wine 前缀，也不会在活跃连接期间根据采集日志重启服务端。
+
+Wayland 模式下，`uu-wayland-capture.service`、`uu-wayland-remote.service`
+和 `uu-wayland-session-guard.service` 分别负责桌面帧、UU 自启动及会话守护。
+ScreenCast Portal 不允许在锁屏状态创建首次授权。首次批准后，helper 会以权限
+`0600` 保存 Portal restore token，并在 capture helper 或系统重启时自动恢复；
+Portal 权限被撤销、原显示器不再可用或 token 失效时，才需要在已解锁的本机桌面
+重新批准屏幕共享请求。helper 运行期间会通过桌面标准 ScreenSaver API 抑制自动
+锁屏，避免 Portal 在无人值守连接中切成黑帧；手工锁屏仍然生效，解锁后服务会
+自动重试采集。
+
+X11 回退模式下，`uu-x11-display.service`、`uu-x11-desktop.service` 和
+`uu-x11-remote.service` 负责专用 X11 显示、Plasma 桌面及 UU 自启动。可用以下
+命令检查运行状态：
+
+```sh
+systemctl --user status uu-x11-display.service uu-x11-desktop.service \
+  uu-x11-remote.service
+```
+
+专用 X11 桌面与本机登录的 Wayland 桌面是两个不同会话。Wine X11 只能采集
+X11 窗口，无法读取原生 Wayland 窗口，所以远端看到的是 `:99` 上的 Plasma
+桌面，而不是当前 `:0` Wayland 会话。需要自定义显示号、分辨率或桌面命令时，
+可以通过 systemd user drop-in 覆盖 `UU_X11_DISPLAY`、`UU_X11_SCREEN` 或
+`UU_X11_DESKTOP_COMMAND`。
 
 UU 的 `StreamerCodecDetector.exe` 需要两个与硬件相关的参数。它们不适合写入
 公共仓库；从 UU 的一次正常探测命令或日志中取得后运行：
@@ -135,9 +193,15 @@ uu-amf-bridge-uninstall
 ```text
 UU streamer.dll
   -> amfrt64.dll / d3d11.dll compatibility bridge
-  -> loopback helper protocol (127.0.0.1:47890)
+  -> encode/decode helper (127.0.0.1:47890)
   -> FFmpeg + Mesa RADV Vulkan Video
+  -> GDI BitBlt hook -> capture helper (127.0.0.1:47892)
+  -> ScreenCast Portal + PipeWire
+  -> USER32 SendInput hook -> capture helper -> KWin EIS/libei
 ```
+
+在 Plasma Wayland 下，输入优先通过 KWin 的 EIS RemoteDesktop 通道注入，避免
+合成器忽略 `/dev/uinput` 虚拟设备；非 KWin 桌面仍保留 `/dev/uinput` 回退。
 
 - helper 仅监听 loopback；协议没有认证，不应暴露到局域网。
 - DLL 与 helper 使用带版本号的握手；混用不同协议版本时硬件能力探测会失败，

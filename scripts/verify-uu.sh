@@ -28,6 +28,37 @@ systemctl --user is-active --quiet uu-amf-helper.service || {
     printf 'uu-amf-helper.service is not running.\n' >&2
     exit 1
 }
+graphics_driver=$({ WINEPREFIX="$wine_prefix" WINEDEBUG=-all wine reg query \
+    'HKCU\Software\Wine\Drivers' /v Graphics 2>/dev/null || true; } |
+    tr -d '\r' |
+    sed -n 's/^[[:space:]]*Graphics[[:space:]]*REG_SZ[[:space:]]*//p' |
+    tail -n1)
+case $graphics_driver in
+    wayland)
+        systemctl --user is-active --quiet uu-wayland-capture.service || {
+            printf 'uu-wayland-capture.service is not running.\n' >&2
+            exit 1
+        }
+        "$HOME/.local/libexec/uu-wayland-capture-helper" --wait-ready 47892 5 || {
+            printf 'Wayland capture has no frame; unlock the desktop and approve the portal request.\n' >&2
+            exit 1
+        }
+        ;;
+    x11)
+        systemctl --user is-active --quiet uu-x11-display.service || {
+            printf 'uu-x11-display.service is not running.\n' >&2
+            exit 1
+        }
+        systemctl --user is-active --quiet uu-x11-desktop.service || {
+            printf 'uu-x11-desktop.service is not running.\n' >&2
+            exit 1
+        }
+        ;;
+    *)
+        printf 'Wine Graphics must be wayland or x11, got: %s\n' "${graphics_driver:-unset}" >&2
+        exit 1
+        ;;
+esac
 test -n "$device_id" && test -n "$adapter_id" || {
     printf 'Set UU_DEVICE_ID and UU_ADAPTER_ID for StreamerCodecDetector.\n' >&2
     printf 'These values are hardware-specific; inspect a normal UU detector invocation or its log.\n' >&2

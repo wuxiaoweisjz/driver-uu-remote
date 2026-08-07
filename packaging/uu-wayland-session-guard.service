@@ -1,0 +1,15 @@
+[Unit]
+Description=UU Remote Wine stale-session guard on Wayland
+Wants=uu-amf-helper.service
+After=uu-amf-helper.service
+
+[Service]
+Type=simple
+ExecStart=%h/.local/libexec/uu-wayland-run %h/.local/libexec/uu-session-guard
+Restart=always
+RestartSec=3
+Environment=UU_SESSION_GUARD_INTERVAL=15
+Environment=UU_REMOTE_BACKEND=wayland
+
+[Install]
+WantedBy=graphical-session.target

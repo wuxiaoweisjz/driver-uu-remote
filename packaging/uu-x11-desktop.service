@@ -1,0 +1,15 @@
+[Unit]
+Description=UU Remote dedicated Plasma X11 desktop
+Requires=uu-x11-display.service
+After=uu-x11-display.service
+
+[Service]
+Type=simple
+ExecStart=%h/.local/libexec/uu-x11-desktop
+Restart=on-failure
+RestartSec=3
+Environment=UU_X11_DISPLAY=:99
+UnsetEnvironment=WAYLAND_DISPLAY DBUS_SESSION_BUS_ADDRESS
+
+[Install]
+WantedBy=default.target

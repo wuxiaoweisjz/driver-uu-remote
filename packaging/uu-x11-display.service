@@ -1,0 +1,14 @@
+[Unit]
+Description=UU Remote dedicated X11 display
+Before=uu-x11-desktop.service uu-x11-remote.service
+
+[Service]
+Type=simple
+ExecStart=%h/.local/libexec/uu-x11-display
+Restart=always
+RestartSec=2
+Environment=UU_X11_DISPLAY=:99
+Environment=UU_X11_SCREEN=1920x1080x24
+
+[Install]
+WantedBy=default.target
