@@ -13,10 +13,11 @@ PE_CFLAGS := -O2 -g -Wall -Wextra -Wno-unused-parameter -m64 -mabi=ms -fshort-wc
 PE_LIBDIR := /usr/lib/wine/x86_64-windows
 
 .PHONY: all clean probe smoke capture-smoke capture-idle-smoke quality-switch-smoke \
-	capture-role-smoke session-guard-smoke
+	capture-role-smoke session-guard-smoke server-compat-smoke
 
 all: $(BUILD_DIR)/amfrt64.dll $(BUILD_DIR)/d3d11.dll $(BUILD_DIR)/uu-amf-helper \
-	$(BUILD_DIR)/uu-wayland-capture-helper $(BUILD_DIR)/amf_pe_smoke.exe
+	$(BUILD_DIR)/uu-wayland-capture-helper $(BUILD_DIR)/amf_pe_smoke.exe \
+	$(BUILD_DIR)/uu-server-launcher.exe $(BUILD_DIR)/uu-server-compat.dll
 
 $(BUILD_DIR):
 	mkdir -p $@
@@ -49,6 +50,41 @@ $(BUILD_DIR)/d3d11.dll: $(BUILD_DIR)/d3d11_proxy.pe.o $(BUILD_DIR)/wayland_captu
 		$(PE_LIBDIR)/libd3d11.a $(PE_LIBDIR)/libdxgi.a $(PE_LIBDIR)/libgdi32.a \
 		$(PE_LIBDIR)/libuser32.a $(PE_LIBDIR)/libws2_32.a \
 		$(PE_LIBDIR)/libkernel32.a $(PE_LIBDIR)/libmsvcrt.a
+
+$(BUILD_DIR)/server_compat_hook.pe.o: src/server_compat_hook.c | $(BUILD_DIR)
+	$(PE_CC) $(PE_CFLAGS) -c -o $@ $<
+	objcopy --remove-section=.comment --remove-section=.note.gnu.property $@
+
+$(BUILD_DIR)/uu-server-compat.dll: $(BUILD_DIR)/server_compat_hook.pe.o src/server_compat_hook.def
+	$(PE_LD) -mi386pep --no-insert-timestamp --dll -e DllMain -o $@ $< \
+		src/server_compat_hook.def $(PE_LIBDIR)/libkernel32.a $(PE_LIBDIR)/libmsvcrt.a
+
+$(BUILD_DIR)/server_launcher.pe.o: src/server_launcher.c | $(BUILD_DIR)
+	$(PE_CC) $(PE_CFLAGS) -c -o $@ $<
+	objcopy --remove-section=.comment --remove-section=.note.gnu.property $@
+
+$(BUILD_DIR)/uu-server-launcher.exe: $(BUILD_DIR)/server_launcher.pe.o
+	$(PE_LD) -mi386pep --no-insert-timestamp --subsystem console -e mainCRTStartup \
+		-o $@ $< $(PE_LIBDIR)/libkernel32.a
+
+$(BUILD_DIR)/server_compat_fixture.o: tests/server_compat_fixture.c | $(BUILD_DIR)
+	$(PE_CC) $(PE_CFLAGS) -c -o $@ $<
+	objcopy --remove-section=.comment --remove-section=.note.gnu.property $@
+
+$(BUILD_DIR)/server_compat_fixture.exe: $(BUILD_DIR)/server_compat_fixture.o
+	$(PE_LD) -mi386pep --no-insert-timestamp --subsystem console -e mainCRTStartup \
+		-o $@ $< $(PE_LIBDIR)/libsetupapi.a $(PE_LIBDIR)/libkernel32.a
+
+server-compat-smoke: $(BUILD_DIR)/uu-server-launcher.exe \
+	$(BUILD_DIR)/uu-server-compat.dll $(BUILD_DIR)/server_compat_fixture.exe
+	@set -e; \
+	test_dir=$(BUILD_DIR)/server-compat-test; \
+	rm -rf "$$test_dir"; mkdir -p "$$test_dir"; \
+	cp $(BUILD_DIR)/uu-server-launcher.exe "$$test_dir/GameViewerServer.exe"; \
+	cp $(BUILD_DIR)/uu-server-compat.dll "$$test_dir/uu-server-compat.dll"; \
+	cp $(BUILD_DIR)/server_compat_fixture.exe "$$test_dir/GameViewerServer.real.exe"; \
+	WINEPREFIX="$(UU_WINEPREFIX)" WINEDEBUG=-all wine "$$test_dir/GameViewerServer.exe"; \
+	echo 'server compatibility hook smoke passed'
 
 $(BUILD_DIR)/uu-amf-helper: src/amf_helper.c src/helper_protocol.h | $(BUILD_DIR)
 	$(CC) -O2 -g -Wall -Wextra $(shell pkg-config --cflags libavcodec libavutil) \
@@ -120,6 +156,9 @@ $(BUILD_DIR)/wayland_capture_auto_smoke.exe: $(BUILD_DIR)/wayland_capture_auto_s
 		-o $@ $< $(PE_LIBDIR)/libuser32.a $(PE_LIBDIR)/libkernel32.a
 
 $(BUILD_DIR)/capture_idle_smoke: tests/capture_idle_smoke.c src/capture_protocol.h | $(BUILD_DIR)
+	$(CC) -O2 -g -Wall -Wextra -Isrc -o $@ $<
+
+$(BUILD_DIR)/capture_click: tests/capture_click.c src/capture_protocol.h | $(BUILD_DIR)
 	$(CC) -O2 -g -Wall -Wextra -Isrc -o $@ $<
 
 capture-idle-smoke: $(BUILD_DIR)/uu-wayland-capture-helper $(BUILD_DIR)/capture_idle_smoke

@@ -62,3 +62,30 @@ if [[ ${starts[*]} != 'GameViewerHealthd.exe GameViewerServer.exe' ]]; then
 fi
 
 printf 'Session guard cleanup policy smoke passed\n'
+
+upgrade_root="$UU_WINEPREFIX/drive_c/users/xiao/AppData/Local/GameViewer/upgrade"
+mkdir -p "$upgrade_root" \
+    "$UU_WINEPREFIX/drive_c/Program Files/Netease/GameViewer/setup" \
+    "$UU_WINEPREFIX/drive_c/Program Files/Netease/GameViewer/bak"
+printf '%s\r\n' \
+    '[4.35.0.9113]' \
+    'status=3' \
+    'installfilepath=C:/Program Files/Netease/GameViewer/setup/UURemote_Setup_4.35.exe' \
+    'changesource=manual_start_ready_version' >"$upgrade_root/upgrade.ini"
+touch "$UU_WINEPREFIX/drive_c/Program Files/Netease/GameViewer/setup/UURemote_Setup_4.35.exe"
+touch "$UU_WINEPREFIX/drive_c/Program Files/Netease/GameViewer/bak/Upgrade.exe"
+mkdir -p "$UU_WINEPREFIX/drive_c/Program Files/Netease/GameViewer/bin"
+touch "$UU_WINEPREFIX/drive_c/Program Files/Netease/GameViewer/bin/Upgrade.exe"
+mkdir -p "$UU_WINEPREFIX/drive_c/Program Files/Netease/GameViewer/bin/drivers"
+touch "$UU_WINEPREFIX/drive_c/Program Files/Netease/GameViewer/bin/drivers/devcon.exe"
+disable_failed_upgrade
+grep -Fqx 'status=0' "$upgrade_root/upgrade.ini"
+test -f "$upgrade_root/disabled/UURemote_Setup_4.35.exe.disabled"
+test -f "$UU_WINEPREFIX/drive_c/Program Files/Netease/GameViewer/bak/Upgrade.exe.disabled"
+test -f "$UU_WINEPREFIX/drive_c/Program Files/Netease/GameViewer/bak/Upgrade.exe.uu-backup"
+test -f "$UU_WINEPREFIX/drive_c/Program Files/Netease/GameViewer/bin/Upgrade.exe"
+test ! -e "$UU_WINEPREFIX/drive_c/Program Files/Netease/GameViewer/bin/Upgrade.exe.disabled"
+disable_wine_driver_installers
+test ! -e "$UU_WINEPREFIX/drive_c/Program Files/Netease/GameViewer/bin/drivers/devcon.exe"
+test -e "$UU_WINEPREFIX/drive_c/Program Files/Netease/GameViewer/bin/drivers/devcon.exe.uu-disabled"
+printf 'Failed upgrade circuit breaker smoke passed\n'

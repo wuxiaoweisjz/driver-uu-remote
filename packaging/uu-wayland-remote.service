@@ -8,6 +8,7 @@ After=uu-wayland-capture.service uu-amf-helper.service graphical-session.target
 Type=oneshot
 RemainAfterExit=yes
 ExecStartPre=%h/.local/libexec/uu-wayland-capture-helper --wait-listening 47892 20
+ExecStartPre=%h/.local/libexec/uu-session-guard --disable-failed-upgrade
 ExecStart=%h/.local/libexec/uu-wayland-run /usr/bin/uuyc-wine
 ExecStop=/usr/bin/uuyc-wine --stop
 TimeoutStartSec=120

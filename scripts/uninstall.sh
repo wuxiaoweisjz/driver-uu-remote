@@ -11,6 +11,8 @@ state_home=${XDG_STATE_HOME:-$HOME/.local/state}
 state_dir=$state_home/uu-amf-bridge
 libexec_dir=$HOME/.local/libexec
 graphics_driver_state=$state_dir/wine-graphics-driver.state
+webview_policy_state=$state_dir/webview-additional-arguments.state
+webview_policy_key='HKLM\Software\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments'
 
 systemctl --user disable --now uu-x11-remote.service uu-session-guard.service \
     uu-amf-helper.service uu-x11-desktop.service uu-x11-display.service \
@@ -26,6 +28,14 @@ for name in amfrt64.dll d3d11.dll d3d11_dxvk.dll dxgi.dll; do
         absent) rm -f -- "$uu_bin/$name" ;;
     esac
 done
+if test -f "$uu_bin/GameViewerServer.real.exe"; then
+    mv -f -- "$uu_bin/GameViewerServer.real.exe" "$uu_bin/GameViewerServer.exe"
+fi
+rm -f -- "$uu_bin/uu-server-compat.dll"
+if test -f "$uu_bin/drivers/devcon.exe.uu-disabled"; then
+    mv -f -- "$uu_bin/drivers/devcon.exe.uu-disabled" \
+        "$uu_bin/drivers/devcon.exe"
+fi
 if test -f "$graphics_driver_state"; then
     case $(sed -n '1p' "$graphics_driver_state") in
         present)
@@ -37,6 +47,21 @@ if test -f "$graphics_driver_state"; then
         absent)
             WINEPREFIX="$wine_prefix" WINEDEBUG=-all wine reg delete \
                 'HKCU\Software\Wine\Drivers' /v Graphics /f >/dev/null 2>&1 || true
+            ;;
+    esac
+    WINEPREFIX="$wine_prefix" wineserver -k >/dev/null 2>&1 || true
+fi
+if test -f "$webview_policy_state"; then
+    case $(sed -n '1p' "$webview_policy_state") in
+        present)
+            webview_policy_value=$(sed -n '2p' "$webview_policy_state")
+            WINEPREFIX="$wine_prefix" WINEDEBUG=-all wine reg add \
+                "$webview_policy_key" /v '*' /t REG_SZ \
+                /d "$webview_policy_value" /f >/dev/null
+            ;;
+        absent)
+            WINEPREFIX="$wine_prefix" WINEDEBUG=-all wine reg delete \
+                "$webview_policy_key" /v '*' /f >/dev/null 2>&1 || true
             ;;
     esac
     WINEPREFIX="$wine_prefix" wineserver -k >/dev/null 2>&1 || true

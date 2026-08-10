@@ -7,12 +7,73 @@ interval=${UU_SESSION_GUARD_INTERVAL:-15}
 upgrade_timeout=${UU_UPGRADE_MAX_SECONDS:-120}
 wine=${WINE_BIN:-/usr/bin/wine}
 bin_dir="$prefix/drive_c/Program Files/Netease/GameViewer/bin"
+upgrade_dir="$prefix/drive_c/users/${USER}/AppData/Local/GameViewer/upgrade"
+upgrade_ini="$upgrade_dir/upgrade.ini"
 snapshot_ready=false
 client_running=false
 webview_running=false
 health_running=false
 server_running=false
 upgrade_pids=()
+
+disable_wine_driver_installers() {
+    local devcon="$bin_dir/drivers/devcon.exe"
+    local disabled="${devcon}.uu-disabled"
+    [[ -f $devcon ]] || return 0
+    [[ -f $disabled ]] || cp -p -- "$devcon" "$disabled"
+    rm -f -- "$devcon"
+    printf 'uu-session-guard: disabled Windows-only UU driver installer %s\n' \
+        "$devcon" >&2
+}
+
+find_upgrade_ini() {
+    [[ -f $upgrade_ini ]] && return 0
+    upgrade_ini=$(find "$prefix/drive_c/users" -type f \
+        -path '*/AppData/Local/GameViewer/upgrade/upgrade.ini' \
+        -print -quit 2>/dev/null || true)
+    [[ -n $upgrade_ini && -f $upgrade_ini ]]
+}
+
+disable_failed_upgrade() {
+    local disabled_dir setup_file upgrade_exe
+    [[ ${UU_ALLOW_WINE_UPGRADE:-0} != 1 ]] || return 0
+    find_upgrade_ini || return 0
+    # Vendor INI files are normally CRLF even when updated from Linux.
+    tr -d '\r' <"$upgrade_ini" | grep -Fqx 'status=3' || return 0
+
+    # Status 3 is the ready-to-install state. On Wine this UU installer
+    # repeatedly stalls, so quarantine the executable and make the state
+    # explicitly non-installable before the client is started again.
+    disabled_dir="${upgrade_ini%/*}/disabled"
+    mkdir -p -- "$disabled_dir"
+    for upgrade_exe in \
+        "$prefix/drive_c/Program Files/Netease/GameViewer/bak/Upgrade.exe" \
+        "$prefix/drive_c/Program Files/Netease/GameViewer/Upgrade.exe"; do
+        [[ -f $upgrade_exe ]] || continue
+        [[ -f ${upgrade_exe}.uu-backup ]] || cp -p -- "$upgrade_exe" "${upgrade_exe}.uu-backup"
+        mv -f -- "$upgrade_exe" "${upgrade_exe}.disabled"
+    done
+    while IFS= read -r setup_file; do
+        setup_file=${setup_file%$'\r'}
+        setup_file="$prefix/drive_c/Program Files/Netease/GameViewer/setup/$setup_file"
+        [[ -f $setup_file ]] || continue
+        mv -- "$setup_file" "$disabled_dir/$(basename "$setup_file").disabled" || true
+    done < <(sed -n 's/^installfilepath=C:\/Program Files\/Netease\/GameViewer\/setup\///p' \
+        "$upgrade_ini")
+    local tmp
+    tmp=$(mktemp "${upgrade_ini}.XXXXXX")
+    awk '
+        { sub(/\r$/, "") }
+        /^status=3$/ { print "status=0"; next }
+        /^installfilepath=/ { print "installfilepath="; next }
+        /^changesource=/ { print "changesource=disabled_by_uu_bridge"; next }
+        { print }
+    ' "$upgrade_ini" >"$tmp"
+    chmod --reference="$upgrade_ini" "$tmp" 2>/dev/null || true
+    mv -f -- "$tmp" "$upgrade_ini"
+    printf 'uu-session-guard: disabled failed UU upgrade described by %s\n' \
+        "$upgrade_ini" >&2
+}
 
 process_has_prefix() {
     local pid=$1 entry process_prefix result=1
@@ -148,6 +209,8 @@ main() {
     trap 'exit 0' INT TERM
     while :; do
         snapshot_ready=false
+        disable_wine_driver_installers
+        disable_failed_upgrade
         cleanup_stale_upgrades
         cleanup_once
         maintain_background_processes
@@ -155,6 +218,12 @@ main() {
         sleep "$interval"
     done
 }
+
+if [[ ${1:-} == --disable-failed-upgrade ]]; then
+    disable_wine_driver_installers
+    disable_failed_upgrade
+    exit 0
+fi
 
 if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
     main "$@"

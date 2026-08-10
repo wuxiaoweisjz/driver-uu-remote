@@ -15,6 +15,9 @@ backup_dir=$state_dir/backup
 libexec_dir=$HOME/.local/libexec
 unit_dir=$config_home/systemd/user
 graphics_driver_state=$state_dir/wine-graphics-driver.state
+webview_policy_state=$state_dir/webview-additional-arguments.state
+webview_policy_key='HKLM\Software\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments'
+webview_policy_args='--single-process --in-process-gpu'
 remote_backend_state=$state_dir/remote-backend
 remote_backend=${UU_REMOTE_BACKEND:-wayland}
 wine_graphics_driver=x11
@@ -27,7 +30,8 @@ case $remote_backend in
     *) uu_bridge_die 'UU_REMOTE_BACKEND must be wayland or x11.' ;;
 esac
 for artifact in "$artifact_dir/amfrt64.dll" "$artifact_dir/d3d11.dll" \
-    "$artifact_dir/uu-amf-helper" "$artifact_dir/uu-wayland-capture-helper"; do
+    "$artifact_dir/uu-amf-helper" "$artifact_dir/uu-wayland-capture-helper" \
+    "$artifact_dir/uu-server-launcher.exe" "$artifact_dir/uu-server-compat.dll"; do
     test -f "$artifact" || { printf 'Missing %s; run make first.\n' "$artifact" >&2; exit 1; }
 done
 capture_helper_changed=true
@@ -65,6 +69,18 @@ backup_target() {
 
 for name in amfrt64.dll d3d11.dll d3d11_dxvk.dll dxgi.dll; do backup_target "$name"; done
 
+server_launcher=$uu_bin/GameViewerServer.exe
+server_real=$uu_bin/GameViewerServer.real.exe
+if ! test -f "$server_real"; then
+    cp -a -- "$server_launcher" "$backup_dir/GameViewerServer.exe"
+    mv -- "$server_launcher" "$server_real"
+elif ! cmp -s "$server_launcher" "$artifact_dir/uu-server-launcher.exe"; then
+    cp -a -- "$server_launcher" "$backup_dir/GameViewerServer.exe.upgrade"
+    mv -f -- "$server_launcher" "$server_real"
+fi
+install -m 0755 "$artifact_dir/uu-server-launcher.exe" "$server_launcher"
+install -m 0644 "$artifact_dir/uu-server-compat.dll" "$uu_bin/uu-server-compat.dll"
+
 if ! test -f "$graphics_driver_state"; then
     graphics_driver=$({ WINEPREFIX="$wine_prefix" WINEDEBUG=-all wine reg query \
         'HKCU\Software\Wine\Drivers' /v Graphics 2>/dev/null || true; } |
@@ -80,6 +96,18 @@ fi
 WINEPREFIX="$wine_prefix" WINEDEBUG=-all wine reg add \
     'HKCU\Software\Wine\Drivers' /v Graphics /t REG_SZ \
     /d "$wine_graphics_driver" /f >/dev/null
+if ! test -f "$webview_policy_state"; then
+    if policy_output=$(WINEPREFIX="$wine_prefix" WINEDEBUG=-all wine reg query \
+        "$webview_policy_key" /v '*' 2>/dev/null); then
+        policy_value=$(printf '%s\n' "$policy_output" | tr -d '\r' | sed -n \
+            's/^[[:space:]]*\*[[:space:]]*REG_SZ[[:space:]]*//p' | tail -n1)
+        printf 'present\n%s\n' "$policy_value" >"$webview_policy_state"
+    else
+        printf 'absent\n' >"$webview_policy_state"
+    fi
+fi
+WINEPREFIX="$wine_prefix" WINEDEBUG=-all wine reg add "$webview_policy_key" \
+    /v '*' /t REG_SZ /d "$webview_policy_args" /f >/dev/null
 WINEPREFIX="$wine_prefix" wineserver -k >/dev/null 2>&1 || true
 
 install -m 0644 "$artifact_dir/amfrt64.dll" "$uu_bin/amfrt64.dll"
