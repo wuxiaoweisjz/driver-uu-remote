@@ -31,20 +31,6 @@ static BOOL environment_enabled(const WCHAR *name)
            lstrcmpiW(value, L"0") != 0 && lstrcmpiW(value, L"false") != 0;
 }
 
-static BOOL controller_mode_marker_present(void)
-{
-    WCHAR path[MAX_PATH];
-    WCHAR *name;
-    DWORD length = GetModuleFileNameW(NULL, path, ARRAYSIZE(path));
-    if (!length || length >= ARRAYSIZE(path)) return FALSE;
-    name = path + length;
-    while (name > path && name[-1] != L'\\' && name[-1] != L'/') --name;
-    if (ARRAYSIZE(path) - (name - path) <= lstrlenW(L"uu-wayland-controller"))
-        return FALSE;
-    lstrcpyW(name, L"uu-wayland-controller");
-    return GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES;
-}
-
 static BOOL controlled_host_process(void)
 {
     WCHAR path[MAX_PATH];
@@ -55,7 +41,6 @@ static BOOL controlled_host_process(void)
     if (length > 0 && length < ARRAYSIZE(role) &&
         lstrcmpiW(role, L"controller") == 0)
         return FALSE;
-    if (controller_mode_marker_present()) return FALSE;
     if (environment_enabled(L"UU_WAYLAND_CAPTURE_FORCE")) return TRUE;
     if (environment_enabled(L"UU_WAYLAND_CAPTURE_DISABLE")) return FALSE;
     length = GetModuleFileNameW(NULL, path, ARRAYSIZE(path));

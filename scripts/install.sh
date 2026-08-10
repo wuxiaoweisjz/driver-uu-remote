@@ -17,7 +17,6 @@ unit_dir=$config_home/systemd/user
 graphics_driver_state=$state_dir/wine-graphics-driver.state
 remote_backend_state=$state_dir/remote-backend
 remote_backend=${UU_REMOTE_BACKEND:-wayland}
-remote_role=${UU_REMOTE_ROLE:-controller}
 wine_graphics_driver=x11
 dxvk_version=3.0.2
 dxvk_hash=9c538924110a7cdef871ca36dee218c0774124374ffdeb38af4b76be55bdf7c2
@@ -26,10 +25,6 @@ dxvk_url=https://github.com/doitsujin/dxvk/releases/download/v${dxvk_version}/dx
 case $remote_backend in
     wayland|x11) ;;
     *) uu_bridge_die 'UU_REMOTE_BACKEND must be wayland or x11.' ;;
-esac
-case $remote_role in
-    controller|host) ;;
-    *) uu_bridge_die 'UU_REMOTE_ROLE must be controller or host.' ;;
 esac
 for artifact in "$artifact_dir/amfrt64.dll" "$artifact_dir/d3d11.dll" \
     "$artifact_dir/uu-amf-helper" "$artifact_dir/uu-wayland-capture-helper"; do
@@ -89,11 +84,6 @@ WINEPREFIX="$wine_prefix" wineserver -k >/dev/null 2>&1 || true
 
 install -m 0644 "$artifact_dir/amfrt64.dll" "$uu_bin/amfrt64.dll"
 install -m 0644 "$artifact_dir/d3d11.dll" "$uu_bin/d3d11.dll"
-if [[ $remote_role == controller ]]; then
-    : >"$uu_bin/uu-wayland-controller"
-else
-    rm -f -- "$uu_bin/uu-wayland-controller"
-fi
 if test -f "$artifact_dir/d3d11_dxvk.dll" && test -f "$artifact_dir/dxgi.dll"; then
     install -m 0644 "$artifact_dir/d3d11_dxvk.dll" "$uu_bin/d3d11_dxvk.dll"
     install -m 0644 "$artifact_dir/dxgi.dll" "$uu_bin/dxgi.dll"

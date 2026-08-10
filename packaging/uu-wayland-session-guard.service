@@ -10,7 +10,6 @@ Restart=always
 RestartSec=3
 Environment=UU_SESSION_GUARD_INTERVAL=15
 Environment=UU_REMOTE_BACKEND=wayland
-Environment=UU_REMOTE_ROLE=controller
 
 [Install]
 WantedBy=graphical-session.target

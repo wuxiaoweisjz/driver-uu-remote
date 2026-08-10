@@ -7,7 +7,6 @@ After=uu-wayland-capture.service uu-amf-helper.service graphical-session.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-Environment=UU_REMOTE_ROLE=controller
 ExecStartPre=%h/.local/libexec/uu-wayland-capture-helper --wait-listening 47892 20
 ExecStart=%h/.local/libexec/uu-wayland-run /usr/bin/uuyc-wine
 ExecStop=/usr/bin/uuyc-wine --stop
