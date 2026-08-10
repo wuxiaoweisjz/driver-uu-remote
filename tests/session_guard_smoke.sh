@@ -32,4 +32,20 @@ if [[ $cleanup_called != stop ]]; then
     exit 1
 fi
 
+starts=()
+prefix_image_running() { [[ $1 == *GameViewer.exe ]]; }
+start_background_process() { starts+=("$1"); }
+maintain_background_processes
+if [[ ${starts[*]} != GameViewerHealthd.exe ]]; then
+    printf 'controller mode started a local GameViewerServer: %s\n' "${starts[*]}" >&2
+    exit 1
+fi
+
+starts=()
+UU_REMOTE_ROLE=host maintain_background_processes
+if [[ ${starts[*]} != 'GameViewerHealthd.exe GameViewerServer.exe' ]]; then
+    printf 'host mode did not start the UU server: %s\n' "${starts[*]}" >&2
+    exit 1
+fi
+
 printf 'Session guard cleanup policy smoke passed\n'

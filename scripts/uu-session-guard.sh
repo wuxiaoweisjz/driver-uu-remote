@@ -111,7 +111,11 @@ cleanup_once() {
 maintain_background_processes() {
     prefix_image_running "$bin_dir/GameViewer.exe" || return 0
     start_background_process GameViewerHealthd.exe
-    start_background_process GameViewerServer.exe
+    # Linux acting as a controller must not run the server: its SendInput
+    # bridge injects into the local desktop instead of forwarding to macOS.
+    if [[ ${UU_REMOTE_ROLE:-controller} == host ]]; then
+        start_background_process GameViewerServer.exe
+    fi
 }
 
 main() {
