@@ -1,9 +1,9 @@
 # UU Remote AMF bridge for Wine
 
-为 Wine 下的 UU 远程提供 AMD AMF 编码和 DXVA11 解码兼容层。项目实现 UU
+为 Wine 下的 UU 远程提供 AMD AMF 编码和 Wayland 兼容层。项目实现 UU
 `streamer.dll` 所需的 Windows `amfrt64.dll` ABI，并通过 Linux helper 将
-D3D11 NV12 帧交给 Mesa RADV Vulkan Video。DXVA11 兼容层则把 H.264 picture
-parameters、slice 和输出纹理桥接到 Vulkan Video 解码。
+D3D11 NV12 帧交给 Mesa RADV Vulkan Video。控制其他设备时使用 UU 内置的
+H.264 软件解码；Wine 下的实验性 DXVA11 回传路径会积压帧，因此不对外报告。
 Wine Wayland 下的桌面采集与输入通过 app-local `d3d11.dll` 修补
 `streamer.dll` 的 `GDI32!BitBlt` 和 `USER32!SendInput` 导入：画面从
 ScreenCast Portal/PipeWire 取得，键盘和鼠标事件通过仅监听 loopback 的 helper
@@ -90,10 +90,10 @@ make smoke
 产物：
 
 - `build/amfrt64.dll`: AMF ABI 和编码桥
-- `build/d3d11.dll`: DXVK 代理及 DXVA11 注入入口
+- `build/d3d11.dll`: DXVK 代理和 Wayland 捕获注入入口
 - `build/uu-amf-helper`: 本机 Vulkan Video helper
 - `build/uu-wayland-capture-helper`: Portal/PipeWire 桌面采集 helper
-- `build/amf_pe_smoke.exe`: Wine 端编码/解码 smoke test
+- `build/amf_pe_smoke.exe`: Wine 端编码和解码回退 smoke test
 
 源码安装同样要求先完全退出 UU：
 
@@ -174,8 +174,9 @@ UU 的 `StreamerCodecDetector.exe` 需要两个与硬件相关的参数。它们
 UU_DEVICE_ID=<device-id> UU_ADAPTER_ID=<adapter-id> uu-amf-bridge-verify
 ```
 
-验证成功时，AMF 编码和 DXVA11 解码都会报告 H.264 8-bit 4:2:0 hardware
-support。验证器还会确认正在验证的 DLL 与当前构建或已安装软件包完全一致。
+验证成功时，AMF 编码会报告 H.264 8-bit 4:2:0 hardware support，DXVA11
+解码则保持禁用以选择 UU 的低延迟软件解码。验证器还会确认正在验证的 DLL 与当前
+构建或已安装软件包完全一致。
 升级 UU、Wine、Mesa 或 DXVK 后应重新安装并验证。
 
 ## 回滚
@@ -204,7 +205,9 @@ UU streamer.dll
 在 Plasma Wayland 下，UU 窗口运行于 XWayland，以兼容作为控制端连接 Windows 或
 macOS 时所需的键盘、鼠标抓取；被控端输入优先通过 KWin 的 EIS RemoteDesktop
 通道注入，避免合成器忽略 `/dev/uinput` 虚拟设备。非 KWin 桌面仍保留
-`/dev/uinput` 回退。
+`/dev/uinput` 回退。安装器同时禁用 Wine 的鼠标回卷，使指针能够离开 UU 远控窗口；
+卸载时会恢复原有注册表值。Wayland 启动器将 DXVK 限制在 60 FPS，避免 UU 主界面
+空闲时持续占用一个 CPU 核心，同时保留远控所需的 60 FPS 上限。
 
 - helper 仅监听 loopback；协议没有认证，不应暴露到局域网。
 - DLL 与 helper 使用带版本号的握手；混用不同协议版本时硬件能力探测会失败，

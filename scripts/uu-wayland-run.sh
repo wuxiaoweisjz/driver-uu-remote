@@ -21,5 +21,6 @@ export XDG_RUNTIME_DIR=$runtime_dir
 export WAYLAND_DISPLAY=$wayland_display
 export XDG_SESSION_TYPE=wayland
 export DBUS_SESSION_BUS_ADDRESS=${DBUS_SESSION_BUS_ADDRESS:-unix:path=$runtime_dir/bus}
+export DXVK_FRAME_RATE=${DXVK_FRAME_RATE:-60}
 
 exec "$@"

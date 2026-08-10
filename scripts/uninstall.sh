@@ -11,7 +11,9 @@ state_home=${XDG_STATE_HOME:-$HOME/.local/state}
 state_dir=$state_home/uu-amf-bridge
 libexec_dir=$HOME/.local/libexec
 graphics_driver_state=$state_dir/wine-graphics-driver.state
+mouse_warp_state=$state_dir/wine-mouse-warp.state
 webview_policy_state=$state_dir/webview-additional-arguments.state
+mouse_warp_key='HKCU\Software\Wine\DirectInput'
 webview_policy_key='HKLM\Software\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments'
 
 systemctl --user disable --now uu-x11-remote.service uu-session-guard.service \
@@ -47,6 +49,21 @@ if test -f "$graphics_driver_state"; then
         absent)
             WINEPREFIX="$wine_prefix" WINEDEBUG=-all wine reg delete \
                 'HKCU\Software\Wine\Drivers' /v Graphics /f >/dev/null 2>&1 || true
+            ;;
+    esac
+    WINEPREFIX="$wine_prefix" wineserver -k >/dev/null 2>&1 || true
+fi
+if test -f "$mouse_warp_state"; then
+    case $(sed -n '1p' "$mouse_warp_state") in
+        present)
+            mouse_warp=$(sed -n '2p' "$mouse_warp_state")
+            WINEPREFIX="$wine_prefix" WINEDEBUG=-all wine reg add \
+                "$mouse_warp_key" /v MouseWarpOverride /t REG_SZ \
+                /d "$mouse_warp" /f >/dev/null
+            ;;
+        absent)
+            WINEPREFIX="$wine_prefix" WINEDEBUG=-all wine reg delete \
+                "$mouse_warp_key" /v MouseWarpOverride /f >/dev/null 2>&1 || true
             ;;
     esac
     WINEPREFIX="$wine_prefix" wineserver -k >/dev/null 2>&1 || true

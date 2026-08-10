@@ -46,19 +46,7 @@ void mainCRTStartup(void)
     ID3D11VideoDevice *second_video_device = NULL;
     ID3D11VideoDevice *video_device = NULL;
     ID3D11VideoContext *video_context = NULL;
-    ID3D11VideoDecoder *decoder = NULL;
-    ID3D11VideoDecoderOutputView *decoder_view = NULL;
-    ID3D11Texture2D *decode_texture = NULL;
     D3D11_VIDEO_DECODER_DESC decoder_desc;
-    D3D11_VIDEO_DECODER_CONFIG decoder_config;
-    D3D11_VIDEO_DECODER_OUTPUT_VIEW_DESC view_desc;
-    D3D11_VIDEO_DECODER_BUFFER_DESC buffer_desc;
-    D3D11_TEXTURE2D_DESC texture_desc;
-    HANDLE bitstream_file = INVALID_HANDLE_VALUE;
-    void *decoder_buffer = NULL;
-    UINT decoder_buffer_size = 0;
-    DWORD bitstream_size;
-    DWORD bytes_read;
     UINT config_count = 0;
     BOOL supported = FALSE;
     D3D_FEATURE_LEVEL feature_level;
@@ -85,8 +73,8 @@ void mainCRTStartup(void)
                                  &second_context)) ||
         FAILED(ID3D11Device_QueryInterface(second_device, &IID_ID3D11VideoDevice,
                                            (void **)&second_video_device)) ||
-        ID3D11VideoDevice_GetVideoDecoderProfileCount(second_video_device) != 1)
-        FAIL("Second D3D11 device DXVA11 bridge failed", 32);
+        ID3D11VideoDevice_GetVideoDecoderProfileCount(second_video_device) != 0)
+        FAIL("Second D3D11 device exposed disabled DXVA11 bridge", 32);
     ID3D11VideoDevice_Release(second_video_device);
     ID3D11DeviceContext_Release(second_context);
     ID3D11Device_Release(second_device);
@@ -98,10 +86,10 @@ void mainCRTStartup(void)
         FAILED(ID3D11DeviceContext_QueryInterface(immediate, &IID_ID3D11VideoContext,
                                                   (void **)&video_context)))
         FAIL("DXVA11 interfaces missing", 23);
-    if (ID3D11VideoDevice_GetVideoDecoderProfileCount(video_device) != 1 ||
+    if (ID3D11VideoDevice_GetVideoDecoderProfileCount(video_device) != 0 ||
         FAILED(ID3D11VideoDevice_CheckVideoDecoderFormat(video_device,
-            &D3D11_DECODER_PROFILE_H264_VLD_NOFGT, DXGI_FORMAT_NV12, &supported)) || !supported)
-        FAIL("DXVA11 H.264 NV12 capability missing", 24);
+            &D3D11_DECODER_PROFILE_H264_VLD_NOFGT, DXGI_FORMAT_NV12, &supported)) || supported)
+        FAIL("Unstable DXVA11 decode path was exposed", 24);
     ZeroMemory(&decoder_desc, sizeof(decoder_desc));
     decoder_desc.Guid = D3D11_DECODER_PROFILE_H264_VLD_NOFGT;
     decoder_desc.SampleWidth = 2560;
@@ -109,56 +97,9 @@ void mainCRTStartup(void)
     decoder_desc.OutputFormat = DXGI_FORMAT_NV12;
     config_count = 0;
     if (FAILED(ID3D11VideoDevice_GetVideoDecoderConfigCount(video_device,
-            &decoder_desc, &config_count)) || config_count != 1 ||
-        FAILED(ID3D11VideoDevice_GetVideoDecoderConfig(video_device,
-            &decoder_desc, 0, &decoder_config)) ||
-        FAILED(ID3D11VideoDevice_CreateVideoDecoder(video_device,
-            &decoder_desc, &decoder_config, &decoder)))
-        FAIL("DXVA11 decoder creation failed", 25);
-    ZeroMemory(&texture_desc, sizeof(texture_desc));
-    texture_desc.Width = 1920;
-    texture_desc.Height = 1080;
-    texture_desc.MipLevels = 1;
-    texture_desc.ArraySize = 1;
-    texture_desc.Format = DXGI_FORMAT_NV12;
-    texture_desc.SampleDesc.Count = 1;
-    texture_desc.Usage = D3D11_USAGE_DEFAULT;
-    if (FAILED(ID3D11Device_CreateTexture2D(device, &texture_desc, NULL, &decode_texture)))
-        FAIL("DXVA11 output texture creation failed", 26);
-    ZeroMemory(&view_desc, sizeof(view_desc));
-    view_desc.DecodeProfile = D3D11_DECODER_PROFILE_H264_VLD_NOFGT;
-    view_desc.ViewDimension = D3D11_VDOV_DIMENSION_TEXTURE2D;
-    if (FAILED(ID3D11VideoDevice_CreateVideoDecoderOutputView(video_device,
-            (ID3D11Resource *)decode_texture, &view_desc, &decoder_view)))
-        FAIL("DXVA11 output view creation failed", 27);
-    bitstream_file = CreateFileW(L"Z:\\tmp\\uu-amf-decode-smoke-1440.h264", GENERIC_READ,
-        FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (bitstream_file == INVALID_HANDLE_VALUE ||
-        (bitstream_size = GetFileSize(bitstream_file, NULL)) == INVALID_FILE_SIZE || !bitstream_size) {
-        if (bitstream_file != INVALID_HANDLE_VALUE) CloseHandle(bitstream_file);
-        bitstream_file = INVALID_HANDLE_VALUE;
-        write_text("DXVA11 1440p capability passed; decode sample not provided\r\n");
-    } else {
-        if (FAILED(ID3D11VideoContext_GetDecoderBuffer(video_context, decoder,
-                D3D11_VIDEO_DECODER_BUFFER_BITSTREAM, &decoder_buffer_size, &decoder_buffer)) ||
-            bitstream_size > decoder_buffer_size ||
-            !ReadFile(bitstream_file, decoder_buffer, bitstream_size, &bytes_read, NULL) ||
-            bytes_read != bitstream_size)
-            FAIL("DXVA11 decoder buffer failed", 29);
-        CloseHandle(bitstream_file);
-        bitstream_file = INVALID_HANDLE_VALUE;
-        if (FAILED(ID3D11VideoContext_ReleaseDecoderBuffer(video_context, decoder,
-                D3D11_VIDEO_DECODER_BUFFER_BITSTREAM)) ||
-            FAILED(ID3D11VideoContext_DecoderBeginFrame(video_context, decoder, decoder_view, 0, NULL)))
-            FAIL("DXVA11 BeginFrame failed", 30);
-        ZeroMemory(&buffer_desc, sizeof(buffer_desc));
-        buffer_desc.BufferType = D3D11_VIDEO_DECODER_BUFFER_BITSTREAM;
-        buffer_desc.DataSize = bitstream_size;
-        if (FAILED(ID3D11VideoContext_SubmitDecoderBuffers(video_context, decoder, 1, &buffer_desc)) ||
-            FAILED(ID3D11VideoContext_DecoderEndFrame(video_context, decoder)))
-            FAIL("DXVA11 decode submission failed", 31);
-        write_text("DXVA11 1440p-to-1080p Vulkan H.264 decode path passed\r\n");
-    }
+            &decoder_desc, &config_count)) || config_count != 0)
+        FAIL("Unstable DXVA11 decoder config was exposed", 25);
+    write_text("DXVA11 decode disabled; UU software fallback selected\r\n");
     if (factory->pVtbl->CreateComponent(factory, context, AMFVideoEncoderVCE_AVC, &encoder) != AMF_OK)
         FAIL("CreateComponent failed", 16);
 
@@ -185,9 +126,6 @@ void mainCRTStartup(void)
     if (!output || ((AMFBuffer *)output)->pVtbl->GetSize((AMFBuffer *)output) == 0)
         FAIL("Encoder returned no packet", 22);
     write_text("Encoded H.264 packet: non-zero bytes\r\n");
-    ID3D11VideoDecoderOutputView_Release(decoder_view);
-    ID3D11Texture2D_Release(decode_texture);
-    ID3D11VideoDecoder_Release(decoder);
     ID3D11VideoContext_Release(video_context);
     ID3D11VideoDevice_Release(video_device);
     finish(output, surface, encoder, context, immediate, device, module, 0);

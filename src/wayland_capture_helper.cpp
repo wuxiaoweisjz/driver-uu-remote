@@ -601,8 +601,8 @@ public:
     uint32_t send(const CaptureInputEvent *events, uint32_t count)
     {
         QMutexLocker locker(&mutex_);
-        bool use_uinput = ensure_uinput();
-        bool use_eis = !use_uinput && ensure_eis();
+        bool use_eis = ensure_eis();
+        bool use_uinput = !use_eis && ensure_uinput();
         if (!use_uinput && !use_eis) return 0;
         uint32_t accepted = 0;
         for (; accepted < count; ++accepted) {

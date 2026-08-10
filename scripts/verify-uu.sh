@@ -35,6 +35,11 @@ graphics_driver=$({ WINEPREFIX="$wine_prefix" WINEDEBUG=-all wine reg query \
     tr -d '\r' |
     sed -n 's/^[[:space:]]*Graphics[[:space:]]*REG_SZ[[:space:]]*//p' |
     tail -n1)
+mouse_warp=$({ WINEPREFIX="$wine_prefix" WINEDEBUG=-all wine reg query \
+    'HKCU\Software\Wine\DirectInput' /v MouseWarpOverride 2>/dev/null || true; } |
+    tr -d '\r' |
+    sed -n 's/^[[:space:]]*MouseWarpOverride[[:space:]]*REG_SZ[[:space:]]*//p' |
+    tail -n1)
 if test -s "$remote_backend_state"; then
     remote_backend=$(head -n1 "$remote_backend_state")
 elif systemctl --user is-active --quiet uu-wayland-capture.service; then
@@ -45,6 +50,11 @@ fi
 if [[ $graphics_driver != x11 ]]; then
     printf 'Wine Graphics must be x11 for reliable UU keyboard and mouse input, got: %s\n' \
         "${graphics_driver:-unset}" >&2
+    exit 1
+fi
+if [[ $mouse_warp != disable ]]; then
+    printf 'Wine MouseWarpOverride must be disable so the pointer can leave UU, got: %s\n' \
+        "${mouse_warp:-unset}" >&2
     exit 1
 fi
 case $remote_backend in
@@ -95,5 +105,4 @@ run_probe() {
 }
 
 run_probe 2 'AMD AMF encoder'
-run_probe 32 'DXVA11 decoder'
-printf 'UU H.264 hardware encode and decode probes passed.\n'
+printf 'UU H.264 hardware encode probe passed; DXVA11 decode remains disabled.\n'

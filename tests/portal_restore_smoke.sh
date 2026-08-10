@@ -5,15 +5,25 @@ helper=${UU_CAPTURE_HELPER:-./build/uu-wayland-capture-helper}
 wayland_run=${UU_WAYLAND_RUN:-$HOME/.local/libexec/uu-wayland-run}
 port=${1:-47893}
 restart_count=${2:-3}
-token_file=${UU_PORTAL_RESTORE_TOKEN_FILE:-${XDG_STATE_HOME:-$HOME/.local/state}/uu-amf-bridge/portal-restore-token}
+token_file=${UU_PORTAL_RESTORE_TOKEN_FILE:-}
 log_file=${UU_PORTAL_RESTORE_LOG:-/tmp/uu-portal-restore-smoke.log}
 helper_pid=
+temporary_token_dir=
+
+if [ -z "$token_file" ]; then
+	temporary_token_dir=$(mktemp -d)
+	token_file=$temporary_token_dir/portal-restore-token
+fi
 
 cleanup()
 {
 	if [ -n "$helper_pid" ]; then
 		kill "$helper_pid" 2>/dev/null || true
 		wait "$helper_pid" 2>/dev/null || true
+	fi
+	if [ -n "$temporary_token_dir" ]; then
+		rm -f -- "$token_file"
+		rmdir -- "$temporary_token_dir" 2>/dev/null || true
 	fi
 }
 trap cleanup EXIT INT TERM

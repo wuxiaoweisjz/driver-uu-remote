@@ -161,6 +161,9 @@ $(BUILD_DIR)/capture_idle_smoke: tests/capture_idle_smoke.c src/capture_protocol
 $(BUILD_DIR)/capture_click: tests/capture_click.c src/capture_protocol.h | $(BUILD_DIR)
 	$(CC) -O2 -g -Wall -Wextra -Isrc -o $@ $<
 
+$(BUILD_DIR)/capture_key: tests/capture_key.c src/capture_protocol.h | $(BUILD_DIR)
+	$(CC) -O2 -g -Wall -Wextra -Isrc -o $@ $<
+
 capture-idle-smoke: $(BUILD_DIR)/uu-wayland-capture-helper $(BUILD_DIR)/capture_idle_smoke
 	@set -e; \
 	port=47893; \

@@ -15,7 +15,6 @@
 
 #define DXVA_BUFFER_COUNT 9
 #define DXVA_RUNTIME_COUNT 64
-#define HELPER_IO_TIMEOUT_MS 5000
 #define HELPER_DECODE_IO_TIMEOUT_MS 2000
 #define HELPER_PROBE_CACHE_MS 10000
 #define DXVA_RETRY_BACKOFF_MS 1000
@@ -326,34 +325,6 @@ static void helper_mark_unavailable(ULONGLONG now)
     helper_probe_time = now;
 }
 
-static int helper_available(void)
-{
-    struct sockaddr_in address;
-    SOCKET socket_handle;
-    ULONGLONG now = GetTickCount64();
-    LONG cached = InterlockedCompareExchange(&helper_probe_result, 0, 0);
-    if (helper_probe_time && now - helper_probe_time < HELPER_PROBE_CACHE_MS) return cached > 0;
-    socket_handle = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (socket_handle == INVALID_SOCKET) goto unavailable;
-    configure_socket_timeouts(socket_handle, HELPER_IO_TIMEOUT_MS);
-    memset(&address, 0, sizeof(address));
-    address.sin_family = AF_INET;
-    address.sin_port = htons(helper_port());
-    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    if (connect(socket_handle, (struct sockaddr *)&address, sizeof(address)) == SOCKET_ERROR ||
-        !helper_handshake(socket_handle, HELPER_DECODER_INIT)) {
-        closesocket(socket_handle);
-        goto unavailable;
-    }
-    closesocket(socket_handle);
-    InterlockedExchange(&helper_probe_result, 1);
-    helper_probe_time = now;
-    return 1;
-unavailable:
-    helper_mark_unavailable(now);
-    return 0;
-}
-
 static void decoder_backoff(BridgeDecoder *decoder)
 {
     ULONGLONG now = GetTickCount64();
@@ -560,7 +531,11 @@ static HRESULT STDMETHODCALLTYPE video_create_output(ID3D11VideoDevice *iface, I
 }
 
 static UINT STDMETHODCALLTYPE video_profile_count(ID3D11VideoDevice *iface)
-{ (void)iface; return helper_available() ? 1 : 0; }
+{
+    (void)iface;
+    /* UU's software decoder is faster than the synchronous Wine NV12 bridge. */
+    return 0;
+}
 static HRESULT STDMETHODCALLTYPE video_profile(ID3D11VideoDevice *iface, UINT index, GUID *profile)
 {
     (void)iface;
@@ -574,8 +549,7 @@ static HRESULT STDMETHODCALLTYPE video_check_format(ID3D11VideoDevice *iface, co
 {
     (void)iface;
     if (!profile || !supported) return E_POINTER;
-    *supported = helper_available() &&
-        guid_is(profile, &D3D11_DECODER_PROFILE_H264_VLD_NOFGT) && format == DXGI_FORMAT_NV12;
+    *supported = FALSE;
     return S_OK;
 }
 static HRESULT STDMETHODCALLTYPE video_config_count(ID3D11VideoDevice *iface,
@@ -583,10 +557,7 @@ static HRESULT STDMETHODCALLTYPE video_config_count(ID3D11VideoDevice *iface,
 {
     (void)iface;
     if (!desc || !count) return E_POINTER;
-    *count = helper_available() &&
-             guid_is(&desc->Guid, &D3D11_DECODER_PROFILE_H264_VLD_NOFGT) &&
-             desc->OutputFormat == DXGI_FORMAT_NV12 &&
-             decoder_dimensions_supported(desc) ? 1 : 0;
+    *count = 0;
     return S_OK;
 }
 static HRESULT STDMETHODCALLTYPE video_config(ID3D11VideoDevice *iface,

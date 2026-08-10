@@ -15,7 +15,9 @@ backup_dir=$state_dir/backup
 libexec_dir=$HOME/.local/libexec
 unit_dir=$config_home/systemd/user
 graphics_driver_state=$state_dir/wine-graphics-driver.state
+mouse_warp_state=$state_dir/wine-mouse-warp.state
 webview_policy_state=$state_dir/webview-additional-arguments.state
+mouse_warp_key='HKCU\Software\Wine\DirectInput'
 webview_policy_key='HKLM\Software\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments'
 webview_policy_args='--single-process --in-process-gpu'
 remote_backend_state=$state_dir/remote-backend
@@ -96,6 +98,20 @@ fi
 WINEPREFIX="$wine_prefix" WINEDEBUG=-all wine reg add \
     'HKCU\Software\Wine\Drivers' /v Graphics /t REG_SZ \
     /d "$wine_graphics_driver" /f >/dev/null
+if ! test -f "$mouse_warp_state"; then
+    mouse_warp=$({ WINEPREFIX="$wine_prefix" WINEDEBUG=-all wine reg query \
+        "$mouse_warp_key" /v MouseWarpOverride 2>/dev/null || true; } |
+        tr -d '\r' |
+        sed -n 's/^[[:space:]]*MouseWarpOverride[[:space:]]*REG_SZ[[:space:]]*//p' |
+        tail -n1)
+    if test -n "$mouse_warp"; then
+        printf 'present\n%s\n' "$mouse_warp" >"$mouse_warp_state"
+    else
+        printf 'absent\n' >"$mouse_warp_state"
+    fi
+fi
+WINEPREFIX="$wine_prefix" WINEDEBUG=-all wine reg add "$mouse_warp_key" \
+    /v MouseWarpOverride /t REG_SZ /d disable /f >/dev/null
 if ! test -f "$webview_policy_state"; then
     if policy_output=$(WINEPREFIX="$wine_prefix" WINEDEBUG=-all wine reg query \
         "$webview_policy_key" /v '*' 2>/dev/null); then
