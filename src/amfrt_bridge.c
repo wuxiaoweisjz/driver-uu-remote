@@ -31,6 +31,9 @@
 #define BRIDGE_MAX_OUTPUTS 8
 #define AMF_TIME_BASE 10000000LL
 #define HELPER_IO_TIMEOUT_MS 5000
+#define HELPER_CONNECT_BACKOFF_MS 1000
+
+static ULONGLONG helper_connect_failure_time;
 
 typedef struct BridgeProperty {
     wchar_t *name;
@@ -755,6 +758,9 @@ static AMF_RESULT AMF_STD_CALL component_init(AMFComponent *iface, AMF_SURFACE_F
     if (component->initialized) return AMF_ALREADY_INITIALIZED;
     if (format != AMF_SURFACE_NV12 || width < 128 || height < 128) return AMF_SURFACE_FORMAT_NOT_SUPPORTED;
     if (component->helper == INVALID_SOCKET) {
+        ULONGLONG last_failure = __atomic_load_n(&helper_connect_failure_time, __ATOMIC_ACQUIRE);
+        if (last_failure && GetTickCount64() - last_failure < HELPER_CONNECT_BACKOFF_MS)
+            return AMF_ENCODER_NOT_PRESENT;
         component->helper = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
         if (component->helper == INVALID_SOCKET) return AMF_ENCODER_NOT_PRESENT;
         socket_configure_timeouts(component->helper);
@@ -765,6 +771,7 @@ static AMF_RESULT AMF_STD_CALL component_init(AMFComponent *iface, AMF_SURFACE_F
         if (InetPtonA(AF_INET, host, &address.sin_addr) != 1 || connect(component->helper, (struct sockaddr *)&address, sizeof(address)) != 0) {
             closesocket(component->helper);
             component->helper = INVALID_SOCKET;
+            __atomic_store_n(&helper_connect_failure_time, GetTickCount64(), __ATOMIC_RELEASE);
             return AMF_ENCODER_NOT_PRESENT;
         }
     }
@@ -784,8 +791,10 @@ static AMF_RESULT AMF_STD_CALL component_init(AMFComponent *iface, AMF_SURFACE_F
         !socket_recv_all(component->helper, &init_reply, sizeof(init_reply)) ||
         !init_reply.enabled || init_reply.protocol_version != HELPER_PROTOCOL_VERSION) {
         component_close_codec(component);
+        __atomic_store_n(&helper_connect_failure_time, GetTickCount64(), __ATOMIC_RELEASE);
         return AMF_ENCODER_NOT_PRESENT;
     }
+    __atomic_store_n(&helper_connect_failure_time, 0, __ATOMIC_RELEASE);
     component->width = width;
     component->height = height;
     component->format = format;

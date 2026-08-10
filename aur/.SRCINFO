@@ -18,6 +18,7 @@ pkgbase = uu-amf-bridge-git
 	depends = vulkan-radeon
 	depends = wine
 	depends = xorg-server-xvfb
+	depends = xorg-xwayland
 	depends = qt6-base
 	depends = pipewire
 	depends = gst-plugin-pipewire

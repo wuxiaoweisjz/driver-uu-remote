@@ -24,6 +24,22 @@ static CRITICAL_SECTION capture_lock;
 static CRITICAL_SECTION input_lock;
 static LONG transport_state;
 
+static unsigned long configured_capture_port(void)
+{
+    char text[16];
+    DWORD length = GetEnvironmentVariableA("UU_CAPTURE_HELPER_PORT", text,
+                                            sizeof(text));
+    unsigned long value = 0;
+    DWORD index;
+    if (!length || length >= sizeof(text)) return CAPTURE_DEFAULT_PORT;
+    for (index = 0; index < length; ++index) {
+        if (text[index] < '0' || text[index] > '9') return CAPTURE_DEFAULT_PORT;
+        value = value * 10u + (unsigned long)(text[index] - '0');
+        if (value > 65535u) return CAPTURE_DEFAULT_PORT;
+    }
+    return value ? value : CAPTURE_DEFAULT_PORT;
+}
+
 static int socket_send_all(SOCKET socket, const void *data, int size)
 {
     const char *cursor = data;
@@ -48,11 +64,39 @@ static int socket_recv_all(SOCKET socket, void *data, int size)
     return 0;
 }
 
+static int authenticate_helper(SOCKET connection)
+{
+    char token[CAPTURE_AUTH_TOKEN_SIZE + 1];
+    DWORD length = GetEnvironmentVariableA("UU_CAPTURE_AUTH_TOKEN", token,
+                                            sizeof(token));
+    CaptureAuthRequest request;
+    CaptureAuthReply reply;
+    if (!length) return 0;
+    if (length != CAPTURE_AUTH_TOKEN_SIZE) return -1;
+    memset(&request, 0, sizeof(request));
+    request.magic = CAPTURE_MAGIC;
+    request.type = CAPTURE_AUTH_REQUEST;
+    request.protocol_version = CAPTURE_PROTOCOL_VERSION;
+    request.token_size = CAPTURE_AUTH_TOKEN_SIZE;
+    memcpy(request.token, token, CAPTURE_AUTH_TOKEN_SIZE);
+    if (socket_send_all(connection, &request, sizeof(request)) < 0 ||
+        socket_recv_all(connection, &reply, sizeof(reply)) < 0 ||
+        reply.magic != CAPTURE_MAGIC || reply.type != CAPTURE_AUTH_REPLY ||
+        reply.protocol_version != CAPTURE_PROTOCOL_VERSION || reply.status) {
+        SecureZeroMemory(token, sizeof(token));
+        return -1;
+    }
+    SecureZeroMemory(token, sizeof(token));
+    return 0;
+}
+
 static SOCKET connect_helper(void)
 {
     WSADATA data;
     struct sockaddr_in address;
+    unsigned long port = configured_capture_port();
     DWORD timeout = 3000;
+    BOOL nodelay = TRUE;
     SOCKET connection;
     /* UU balances its own WSAStartup calls with WSACleanup, which can also
        invalidate sockets opened by the injected bridge. Re-register before
@@ -60,13 +104,18 @@ static SOCKET connect_helper(void)
     if (WSAStartup(MAKEWORD(2, 2), &data) != 0) return INVALID_SOCKET;
     connection = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (connection == INVALID_SOCKET) return INVALID_SOCKET;
-    setsockopt(connection, SOL_SOCKET, SO_RCVTIMEO, (const char *)&timeout, sizeof(timeout));
     setsockopt(connection, SOL_SOCKET, SO_SNDTIMEO, (const char *)&timeout, sizeof(timeout));
+    setsockopt(connection, SOL_SOCKET, SO_RCVTIMEO, (const char *)&timeout, sizeof(timeout));
+    setsockopt(connection, IPPROTO_TCP, TCP_NODELAY, (const char *)&nodelay, sizeof(nodelay));
     memset(&address, 0, sizeof(address));
     address.sin_family = AF_INET;
     address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    address.sin_port = htons(CAPTURE_DEFAULT_PORT);
+    address.sin_port = htons((u_short)port);
     if (connect(connection, (const struct sockaddr *)&address, sizeof(address)) != 0) {
+        closesocket(connection);
+        return INVALID_SOCKET;
+    }
+    if (authenticate_helper(connection) < 0) {
         closesocket(connection);
         return INVALID_SOCKET;
     }
@@ -134,8 +183,14 @@ static BOOL WINAPI capture_bitblt(HDC destination, int x_destination, int y_dest
     information.bmiHeader.biPlanes = 1;
     information.bmiHeader.biBitCount = 32;
     information.bmiHeader.biCompression = BI_RGB;
+    /* The portal frame keeps the physical desktop size while UU changes its
+       capture bitmap size when the quality preset changes. Treat the portal
+       image as the complete source frame; reusing UU's destination dimensions
+       as the source rectangle crops the image and produces alternating partial
+       frames during a preset transition. */
     copied = StretchDIBits(destination, x_destination, y_destination, width, height,
-                           x_source, y_source, width, height, pixels, &information,
+                           0, 0, (int)reply.width, (int)reply.height,
+                           pixels, &information,
                            DIB_RGB_COLORS, SRCCOPY);
     HeapFree(GetProcessHeap(), 0, pixels);
     if (copied <= 0) {
@@ -309,7 +364,7 @@ static BOOL patch_gvinput_send(HMODULE module)
         0x48, 0x89, 0x5c, 0x24, 0x08, 0x48
     };
     /* Jump through GameViewerServer's USER32!SendInput IAT entry. The IAT is
-       patched first, so UU's already-structured INPUT array reaches the helper. */
+       patched first, so UU's already-structured INPUT array reaches uinput. */
     static const uint8_t replacement[] = {0xff, 0x25, 0xfa, 0xf7, 0x6c, 0x01};
     uint8_t *base = (uint8_t *)module;
     IMAGE_DOS_HEADER *dos = (IMAGE_DOS_HEADER *)base;

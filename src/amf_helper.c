@@ -18,6 +18,10 @@
 
 #include "helper_protocol.h"
 
+#define HELPER_MAX_CLIENTS 16
+
+static int active_clients;
+
 typedef struct EncoderState {
     AVCodecContext *codec;
     AVBufferRef *device;
@@ -339,6 +343,7 @@ static void *client_thread(void *opaque)
     int client = (int)(intptr_t)opaque;
     handle_client(client);
     close(client);
+    __sync_fetch_and_sub(&active_clients, 1);
     return NULL;
 }
 
@@ -373,7 +378,13 @@ int main(int argc, char **argv)
         if (client < 0) { if (errno == EINTR) continue; perror("accept"); break; }
         setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
         setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+        if (__sync_fetch_and_add(&active_clients, 1) >= HELPER_MAX_CLIENTS) {
+            __sync_fetch_and_sub(&active_clients, 1);
+            close(client);
+            continue;
+        }
         if (pthread_create(&thread, NULL, client_thread, (void *)(intptr_t)client) != 0) {
+            __sync_fetch_and_sub(&active_clients, 1);
             close(client);
             continue;
         }

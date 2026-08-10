@@ -1,4 +1,5 @@
 LIBRARY streamer
 EXPORTS
     RunCapture
+    RunQualitySwitchCapture
     RunInput

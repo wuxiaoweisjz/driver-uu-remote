@@ -9,6 +9,8 @@ uu_bin=$(uu_bridge_find_bin "$wine_prefix")
 device_id=${UU_DEVICE_ID:-}
 adapter_id=${UU_ADAPTER_ID:-}
 output_dir=$(mktemp -d)
+state_home=${XDG_STATE_HOME:-$HOME/.local/state}
+remote_backend_state=$state_home/uu-amf-bridge/remote-backend
 trap 'rm -rf -- "$output_dir"' EXIT
 
 if uu_bridge_is_running; then
@@ -33,7 +35,19 @@ graphics_driver=$({ WINEPREFIX="$wine_prefix" WINEDEBUG=-all wine reg query \
     tr -d '\r' |
     sed -n 's/^[[:space:]]*Graphics[[:space:]]*REG_SZ[[:space:]]*//p' |
     tail -n1)
-case $graphics_driver in
+if test -s "$remote_backend_state"; then
+    remote_backend=$(head -n1 "$remote_backend_state")
+elif systemctl --user is-active --quiet uu-wayland-capture.service; then
+    remote_backend=wayland
+else
+    remote_backend=x11
+fi
+if [[ $graphics_driver != x11 ]]; then
+    printf 'Wine Graphics must be x11 for reliable UU keyboard and mouse input, got: %s\n' \
+        "${graphics_driver:-unset}" >&2
+    exit 1
+fi
+case $remote_backend in
     wayland)
         systemctl --user is-active --quiet uu-wayland-capture.service || {
             printf 'uu-wayland-capture.service is not running.\n' >&2
@@ -55,7 +69,8 @@ case $graphics_driver in
         }
         ;;
     *)
-        printf 'Wine Graphics must be wayland or x11, got: %s\n' "${graphics_driver:-unset}" >&2
+        printf 'Remote backend state must be wayland or x11, got: %s\n' \
+            "${remote_backend:-unset}" >&2
         exit 1
         ;;
 esac

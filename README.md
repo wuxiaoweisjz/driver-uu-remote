@@ -7,7 +7,7 @@ parameters、slice 和输出纹理桥接到 Vulkan Video 解码。
 Wine Wayland 下的桌面采集与输入通过 app-local `d3d11.dll` 修补
 `streamer.dll` 的 `GDI32!BitBlt` 和 `USER32!SendInput` 导入：画面从
 ScreenCast Portal/PipeWire 取得，键盘和鼠标事件通过仅监听 loopback 的 helper
-在 Plasma 下转为 KWin EIS 事件，其他桌面则回退到 Linux `/dev/uinput`。
+转为 Linux `/dev/uinput` 事件。
 
 本项目不包含或修改 UU 的认证、信令、传输协议和客户端文件，也不绕过账号或
 会员限制。
@@ -20,7 +20,7 @@ ScreenCast Portal/PipeWire 取得，键盘和鼠标事件通过仅监听 loopbac
 - FFmpeg 提供 `h264_vulkan` 编码器和 Vulkan H.264 解码支持
 - H.264、8-bit、4:2:0、NV12
 
-已验证组合：Wine Staging 11.14、UU 远程 4.33、AMD Renoir、Mesa 26.1.4，
+已验证组合：Wine Staging 11.14、UU 远程 4.35、AMD Renoir、Mesa 26.1.4，
 分辨率最高 3840x2160。H.265、10-bit 和 4:4:4 当前明确返回不支持。
 
 ## Arch Linux 安装
@@ -52,8 +52,9 @@ uu-amf-bridge-install
 
 安装器会自动查找常见的 UU Wine prefix，备份已有 DLL，并安装固定校验版本的
 DXVK。它不会替换 Wine `system32` 中的 DLL，也会拒绝在 UU 主程序、服务端或
-硬件探测器仍在运行时替换 app-local DLL。安装器会把该 Wine prefix 的图形驱动
-默认设置为 Wayland，并启动 Portal/PipeWire 桌面采集桥。首次运行时必须在已解锁
+硬件探测器仍在运行时替换 app-local DLL。Wayland 桌面模式会让 UU 使用 Wine X11
+窗口驱动，以兼容 UU 的键盘、鼠标抓取，同时通过 Portal/PipeWire 采集真实 Wayland
+桌面，并通过 EIS 注入远端输入。首次运行时必须在已解锁
 的本机 Wayland 桌面批准系统的屏幕共享请求；授权会由 Portal 持久保存，capture
 helper 或系统重启后自动恢复并轮换 restore token。UU 会等到首帧可用后再启动。
 卸载时会恢复原来的图形驱动配置。
@@ -74,8 +75,8 @@ X11 模式会启动或复用 `:99`，并让 UU 主程序、后台服务和会话
 ```sh
 sudo pacman -S --needed base-devel ffmpeg libarchive mesa pkgconf vulkan-radeon \
   wine-staging qt6-base pipewire gst-plugin-pipewire gst-plugins-base-libs \
-  libei xdg-desktop-portal xdg-desktop-portal-kde \
-  xorg-server-xvfb kwin plasma-workspace
+  xdg-desktop-portal xdg-desktop-portal-kde \
+  xorg-server-xvfb xorg-xwayland kwin plasma-workspace
 ```
 
 构建并检查主机 Vulkan Video 能力：
@@ -200,14 +201,17 @@ UU streamer.dll
   -> USER32 SendInput hook -> capture helper -> KWin EIS/libei
 ```
 
-在 Plasma Wayland 下，输入优先通过 KWin 的 EIS RemoteDesktop 通道注入，避免
-合成器忽略 `/dev/uinput` 虚拟设备；非 KWin 桌面仍保留 `/dev/uinput` 回退。
+在 Plasma Wayland 下，UU 窗口运行于 XWayland，以兼容作为控制端连接 Windows 或
+macOS 时所需的键盘、鼠标抓取；被控端输入优先通过 KWin 的 EIS RemoteDesktop
+通道注入，避免合成器忽略 `/dev/uinput` 虚拟设备。非 KWin 桌面仍保留
+`/dev/uinput` 回退。
 
 - helper 仅监听 loopback；协议没有认证，不应暴露到局域网。
 - DLL 与 helper 使用带版本号的握手；混用不同协议版本时硬件能力探测会失败，
   不会进入半初始化状态。
-- helper 的收发操作有 5 秒上限；helper 卡死或退出时编解码调用会失败返回并在
-  后续初始化时重试，避免长期阻塞 UU 的图形线程。
+- helper 的阻塞发送有 5 秒上限；输入和采集连接允许在整个 UU 会话中保持空闲，
+  不会丢失空闲后的第一个按键或点击。helper 卡死或退出时调用会失败返回并在后续
+  请求时重连，避免长期阻塞 UU 的图形线程。
 - D3D11 与 helper 之间目前经过 CPU 映射，硬编和硬解各有一次内存拷贝。
 - “原画”仍受 UU 自身网络自适应控制，高丢包时可能独立降档。
 - 这是第三方兼容项目，与网易、UU 或 AMD 无隶属关系。

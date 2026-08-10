@@ -20,11 +20,13 @@ void mainCRTStartup(void)
     HMODULE streamer = LoadLibraryA("streamer.dll");
     RunCaptureFn capture = streamer ? (RunCaptureFn)(void *)GetProcAddress(
         streamer, "RunCapture") : NULL;
+    RunCaptureFn quality_capture = streamer ? (RunCaptureFn)(void *)GetProcAddress(
+        streamer, "RunQualitySwitchCapture") : NULL;
     RunInputFn input = streamer ? (RunInputFn)(void *)GetProcAddress(
         streamer, "RunInput") : NULL;
 
     Sleep(250);
-    if (!capture || !input) {
+    if (!capture || !quality_capture || !input) {
         print_message("automatic Wayland BitBlt bridge failed\r\n");
         ExitProcess(1);
     }
@@ -40,11 +42,15 @@ void mainCRTStartup(void)
         ExitProcess(1);
     }
     for (index = 0; index < iterations; ++index) {
-        if (!capture()) {
-            print_message("automatic Wayland BitBlt bridge failed\r\n");
+        if (!(iterations > 1 ? quality_capture() : capture())) {
+            print_message(iterations > 1
+                ? "automatic Wayland quality switch bridge failed\r\n"
+                : "automatic Wayland BitBlt bridge failed\r\n");
             ExitProcess(1);
         }
     }
-    print_message("automatic Wayland BitBlt bridge passed\r\n");
+    print_message(iterations > 1
+        ? "automatic Wayland quality switch bridge passed\r\n"
+        : "automatic Wayland BitBlt bridge passed\r\n");
     ExitProcess(0);
 }

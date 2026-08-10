@@ -12,7 +12,8 @@ PE_CFLAGS := -O2 -g -Wall -Wextra -Wno-unused-parameter -m64 -mabi=ms -fshort-wc
 	-I/usr/include/wine/windows -I$(AMF_INCLUDE)
 PE_LIBDIR := /usr/lib/wine/x86_64-windows
 
-.PHONY: all clean probe smoke capture-smoke
+.PHONY: all clean probe smoke capture-smoke capture-idle-smoke quality-switch-smoke \
+	capture-role-smoke session-guard-smoke
 
 all: $(BUILD_DIR)/amfrt64.dll $(BUILD_DIR)/d3d11.dll $(BUILD_DIR)/uu-amf-helper \
 	$(BUILD_DIR)/uu-wayland-capture-helper $(BUILD_DIR)/amf_pe_smoke.exe
@@ -118,6 +119,18 @@ $(BUILD_DIR)/wayland_capture_auto_smoke.exe: $(BUILD_DIR)/wayland_capture_auto_s
 	$(PE_LD) -mi386pep --no-insert-timestamp --subsystem console -e mainCRTStartup \
 		-o $@ $< $(PE_LIBDIR)/libuser32.a $(PE_LIBDIR)/libkernel32.a
 
+$(BUILD_DIR)/capture_idle_smoke: tests/capture_idle_smoke.c src/capture_protocol.h | $(BUILD_DIR)
+	$(CC) -O2 -g -Wall -Wextra -Isrc -o $@ $<
+
+capture-idle-smoke: $(BUILD_DIR)/uu-wayland-capture-helper $(BUILD_DIR)/capture_idle_smoke
+	@set -e; \
+	port=47893; \
+	QT_QPA_PLATFORM=offscreen ./$(BUILD_DIR)/uu-wayland-capture-helper \
+		--test-pattern $$port >/tmp/uu-wayland-capture-idle-smoke.log 2>&1 & helper_pid=$$!; \
+	trap 'kill $$helper_pid 2>/dev/null || true' EXIT; \
+	./$(BUILD_DIR)/uu-wayland-capture-helper --wait-ready $$port 10; \
+	./$(BUILD_DIR)/capture_idle_smoke $$port
+
 capture-smoke: $(BUILD_DIR)/gdi_capture_smoke.exe
 	@set -e; \
 	display=$${UU_X11_DISPLAY:-:99}; \
@@ -125,6 +138,51 @@ capture-smoke: $(BUILD_DIR)/gdi_capture_smoke.exe
 	env -u WAYLAND_DISPLAY DISPLAY="$$display" XAUTHORITY="$$xauthority" \
 		WINEPREFIX="$(UU_WINEPREFIX)" WINEDEBUG=-all \
 		wine ./$(BUILD_DIR)/gdi_capture_smoke.exe
+
+quality-switch-smoke: $(BUILD_DIR)/d3d11.dll $(BUILD_DIR)/streamer.dll \
+	$(BUILD_DIR)/wayland_capture_auto_smoke.exe $(BUILD_DIR)/uu-wayland-capture-helper
+	@set -e; \
+	port=47894; \
+	token=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef; \
+	UU_CAPTURE_AUTH_TOKEN=$$token QT_QPA_PLATFORM=offscreen \
+		./$(BUILD_DIR)/uu-wayland-capture-helper \
+		--test-pattern $$port >/tmp/uu-wayland-quality-switch-smoke.log 2>&1 & helper_pid=$$!; \
+	trap 'kill $$helper_pid 2>/dev/null || true' EXIT; \
+	UU_CAPTURE_AUTH_TOKEN=$$token ./$(BUILD_DIR)/uu-wayland-capture-helper \
+		--wait-ready $$port 10; \
+	cd $(BUILD_DIR) && WAYLAND_DISPLAY=wayland-test \
+		UU_CAPTURE_AUTH_TOKEN=$$token UU_CAPTURE_HELPER_PORT=$$port \
+		UU_WAYLAND_CAPTURE_FORCE=1 \
+		UU_WAYLAND_CAPTURE_STRESS=1 \
+		WINEDLLOVERRIDES=d3d11=n WINEDEBUG=-all wine ./wayland_capture_auto_smoke.exe
+
+capture-role-smoke: $(BUILD_DIR)/d3d11.dll $(BUILD_DIR)/streamer.dll \
+	$(BUILD_DIR)/wayland_capture_auto_smoke.exe $(BUILD_DIR)/uu-wayland-capture-helper
+	@set -e; \
+	port=47895; \
+	token=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef; \
+	cp $(BUILD_DIR)/wayland_capture_auto_smoke.exe $(BUILD_DIR)/GameViewerServer.exe; \
+	cp $(BUILD_DIR)/wayland_capture_auto_smoke.exe $(BUILD_DIR)/GameViewer.exe; \
+	UU_CAPTURE_AUTH_TOKEN=$$token QT_QPA_PLATFORM=offscreen \
+		./$(BUILD_DIR)/uu-wayland-capture-helper --test-pattern $$port \
+		>/tmp/uu-wayland-capture-role-smoke.log 2>&1 & helper_pid=$$!; \
+	trap 'kill $$helper_pid 2>/dev/null || true; \
+		rm -f $(BUILD_DIR)/GameViewerServer.exe $(BUILD_DIR)/GameViewer.exe' EXIT; \
+	UU_CAPTURE_AUTH_TOKEN=$$token ./$(BUILD_DIR)/uu-wayland-capture-helper \
+		--wait-ready $$port 10; \
+	cd $(BUILD_DIR); \
+	WAYLAND_DISPLAY=wayland-test UU_CAPTURE_AUTH_TOKEN=$$token \
+		UU_CAPTURE_HELPER_PORT=$$port WINEDLLOVERRIDES=d3d11=n WINEDEBUG=-all \
+		wine ./GameViewerServer.exe; \
+	if WAYLAND_DISPLAY=wayland-test UU_CAPTURE_AUTH_TOKEN=$$token \
+		UU_CAPTURE_HELPER_PORT=$$port WINEDLLOVERRIDES=d3d11=n WINEDEBUG=-all \
+		wine ./GameViewer.exe; then \
+		echo 'controller role unexpectedly installed capture hook' >&2; exit 1; \
+	fi; \
+	echo 'capture role gate passed'
+
+session-guard-smoke:
+	bash tests/session_guard_smoke.sh
 
 $(BUILD_DIR)/d3d11_dxvk.dll: | $(BUILD_DIR)
 	cp "$(UU_BIN)/d3d11_dxvk.dll" $@

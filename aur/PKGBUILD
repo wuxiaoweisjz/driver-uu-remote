@@ -9,7 +9,7 @@ url='https://github.com/wuxiaoweisjz/driver-uu-remote'
 license=('MIT' 'Zlib')
 install=uu-amf-bridge.install
 depends=('bash' 'curl' 'ffmpeg' 'libarchive' 'systemd' 'uuyc-wine' 'vulkan-radeon' 'wine'
-         'xorg-server-xvfb' 'qt6-base' 'pipewire' 'gst-plugin-pipewire'
+         'xorg-server-xvfb' 'xorg-xwayland' 'qt6-base' 'pipewire' 'gst-plugin-pipewire'
          'gst-plugins-base-libs' 'libei' 'xdg-desktop-portal')
 optdepends=('kwin: Plasma desktop for the dedicated X11 session'
             'plasma-workspace: Plasma shell for the dedicated X11 session'

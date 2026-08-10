@@ -16,7 +16,11 @@
 #define DXVA_BUFFER_COUNT 9
 #define DXVA_RUNTIME_COUNT 64
 #define HELPER_IO_TIMEOUT_MS 5000
+#define HELPER_DECODE_IO_TIMEOUT_MS 2000
 #define HELPER_PROBE_CACHE_MS 10000
+#define DXVA_RETRY_BACKOFF_MS 1000
+#define DXVA_MAX_SAMPLE_WIDTH 2560
+#define DXVA_MAX_SAMPLE_HEIGHT 1440
 
 typedef struct DxvaRuntime DxvaRuntime;
 
@@ -35,8 +39,13 @@ typedef struct BridgeDecoder {
     D3D11_VIDEO_DECODER_CONFIG config;
     DecoderBuffer buffers[DXVA_BUFFER_COUNT];
     ID3D11VideoDecoderOutputView *output;
+    uint8_t *frame;
+    UINT frame_capacity;
+    uint8_t *upload;
+    UINT upload_capacity;
     DxvaRuntime *runtime;
     SOCKET helper;
+    ULONGLONG retry_after;
     CRITICAL_SECTION lock;
 } BridgeDecoder;
 
@@ -243,6 +252,13 @@ static int guid_is(REFGUID left, REFGUID right)
     return left && right && memcmp(left, right, sizeof(GUID)) == 0;
 }
 
+static int decoder_dimensions_supported(const D3D11_VIDEO_DECODER_DESC *desc)
+{
+    return desc && desc->SampleWidth && desc->SampleHeight &&
+           desc->SampleWidth <= DXVA_MAX_SAMPLE_WIDTH &&
+           desc->SampleHeight <= DXVA_MAX_SAMPLE_HEIGHT;
+}
+
 static int send_all(SOCKET socket_handle, const void *data, size_t size)
 {
     const char *cursor = data;
@@ -284,9 +300,8 @@ static unsigned short helper_port(void)
     return (unsigned short)value;
 }
 
-static void configure_socket_timeouts(SOCKET socket_handle)
+static void configure_socket_timeouts(SOCKET socket_handle, DWORD timeout)
 {
-    DWORD timeout = HELPER_IO_TIMEOUT_MS;
     setsockopt(socket_handle, SOL_SOCKET, SO_RCVTIMEO, (const char *)&timeout, sizeof(timeout));
     setsockopt(socket_handle, SOL_SOCKET, SO_SNDTIMEO, (const char *)&timeout, sizeof(timeout));
 }
@@ -305,6 +320,12 @@ static int helper_handshake(SOCKET socket_handle, uint32_t type)
            reply.protocol_version == HELPER_PROTOCOL_VERSION;
 }
 
+static void helper_mark_unavailable(ULONGLONG now)
+{
+    InterlockedExchange(&helper_probe_result, -1);
+    helper_probe_time = now;
+}
+
 static int helper_available(void)
 {
     struct sockaddr_in address;
@@ -314,7 +335,7 @@ static int helper_available(void)
     if (helper_probe_time && now - helper_probe_time < HELPER_PROBE_CACHE_MS) return cached > 0;
     socket_handle = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (socket_handle == INVALID_SOCKET) goto unavailable;
-    configure_socket_timeouts(socket_handle);
+    configure_socket_timeouts(socket_handle, HELPER_IO_TIMEOUT_MS);
     memset(&address, 0, sizeof(address));
     address.sin_family = AF_INET;
     address.sin_port = htons(helper_port());
@@ -329,28 +350,44 @@ static int helper_available(void)
     helper_probe_time = now;
     return 1;
 unavailable:
-    InterlockedExchange(&helper_probe_result, -1);
-    helper_probe_time = now;
+    helper_mark_unavailable(now);
     return 0;
+}
+
+static void decoder_backoff(BridgeDecoder *decoder)
+{
+    ULONGLONG now = GetTickCount64();
+    decoder->retry_after = now + DXVA_RETRY_BACKOFF_MS;
+    helper_mark_unavailable(now);
 }
 
 static int decoder_connect(BridgeDecoder *decoder)
 {
     struct sockaddr_in address;
+    ULONGLONG now = GetTickCount64();
+    LONG probed;
     if (decoder->helper != INVALID_SOCKET) return 1;
+    if (decoder->retry_after && now < decoder->retry_after) return 0;
+    probed = InterlockedCompareExchange(&helper_probe_result, 0, 0);
+    if (helper_probe_time && now - helper_probe_time < HELPER_PROBE_CACHE_MS && probed <= 0) {
+        decoder->retry_after = now + DXVA_RETRY_BACKOFF_MS;
+        return 0;
+    }
     decoder->helper = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (decoder->helper == INVALID_SOCKET) return 0;
-    configure_socket_timeouts(decoder->helper);
+    configure_socket_timeouts(decoder->helper, HELPER_DECODE_IO_TIMEOUT_MS);
     memset(&address, 0, sizeof(address));
     address.sin_family = AF_INET;
     address.sin_port = htons(helper_port());
     address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     if (connect(decoder->helper, (struct sockaddr *)&address, sizeof(address)) == SOCKET_ERROR) goto fail;
     if (!helper_handshake(decoder->helper, HELPER_DECODER_INIT)) goto fail;
+    decoder->retry_after = 0;
     return 1;
 fail:
     closesocket(decoder->helper);
     decoder->helper = INVALID_SOCKET;
+    decoder_backoff(decoder);
     return 0;
 }
 
@@ -381,6 +418,8 @@ static ULONG STDMETHODCALLTYPE decoder_release(ID3D11VideoDecoder *iface)
         if (decoder->output) ID3D11VideoDecoderOutputView_Release(decoder->output);
         if (decoder->helper != INVALID_SOCKET) closesocket(decoder->helper);
         for (i = 0; i < DXVA_BUFFER_COUNT; ++i) free(decoder->buffers[i].data);
+        free(decoder->frame);
+        free(decoder->upload);
         ID3D11Device_Release(decoder->device);
         DeleteCriticalSection(&decoder->lock);
         free(decoder);
@@ -483,7 +522,8 @@ static HRESULT STDMETHODCALLTYPE video_create_decoder(ID3D11VideoDevice *iface,
     if (!runtime || !desc || !config || !out) return E_INVALIDARG;
     *out = NULL;
     if (!guid_is(&desc->Guid, &D3D11_DECODER_PROFILE_H264_VLD_NOFGT) ||
-        desc->OutputFormat != DXGI_FORMAT_NV12) return E_INVALIDARG;
+        desc->OutputFormat != DXGI_FORMAT_NV12 ||
+        !decoder_dimensions_supported(desc)) return E_INVALIDARG;
     decoder = calloc(1, sizeof(*decoder));
     if (!decoder) return E_OUTOFMEMORY;
     decoder->iface.lpVtbl = (ID3D11VideoDecoderVtbl *)&decoder_vtbl;
@@ -545,7 +585,8 @@ static HRESULT STDMETHODCALLTYPE video_config_count(ID3D11VideoDevice *iface,
     if (!desc || !count) return E_POINTER;
     *count = helper_available() &&
              guid_is(&desc->Guid, &D3D11_DECODER_PROFILE_H264_VLD_NOFGT) &&
-             desc->OutputFormat == DXGI_FORMAT_NV12 ? 1 : 0;
+             desc->OutputFormat == DXGI_FORMAT_NV12 &&
+             decoder_dimensions_supported(desc) ? 1 : 0;
     return S_OK;
 }
 static HRESULT STDMETHODCALLTYPE video_config(ID3D11VideoDevice *iface,
@@ -554,7 +595,8 @@ static HRESULT STDMETHODCALLTYPE video_config(ID3D11VideoDevice *iface,
     (void)iface;
     if (!desc || !config) return E_POINTER;
     if (index || !guid_is(&desc->Guid, &D3D11_DECODER_PROFILE_H264_VLD_NOFGT) ||
-        desc->OutputFormat != DXGI_FORMAT_NV12) return E_INVALIDARG;
+        desc->OutputFormat != DXGI_FORMAT_NV12 ||
+        !decoder_dimensions_supported(desc)) return E_INVALIDARG;
     memset(config, 0, sizeof(*config));
     config->ConfigBitstreamRaw = 2;
     config->ConfigMinRenderTargetBuffCount = 8;
@@ -629,10 +671,12 @@ static HRESULT upload_nv12(BridgeDecoder *decoder, const uint8_t *data,
 {
     BridgeOutputView *view;
     ID3D11Texture2D *target = NULL;
-    ID3D11Texture2D *staging = NULL;
     D3D11_TEXTURE2D_DESC desc;
-    D3D11_MAPPED_SUBRESOURCE mapped;
+    uint8_t *upload_data;
+    uint64_t upload_size;
     UINT subresource;
+    UINT output_width;
+    UINT output_height;
     UINT y;
     HRESULT hr;
     if (!decoder->output || decoder->output->lpVtbl != &view_vtbl) return E_FAIL;
@@ -640,32 +684,90 @@ static HRESULT upload_nv12(BridgeDecoder *decoder, const uint8_t *data,
     hr = ID3D11Resource_QueryInterface(view->resource, &IID_ID3D11Texture2D, (void **)&target);
     if (FAILED(hr)) return hr;
     ID3D11Texture2D_GetDesc(target, &desc);
-    if (desc.Format != DXGI_FORMAT_NV12 || width > desc.Width || height > desc.Height) {
+    if (desc.Format != DXGI_FORMAT_NV12 || !width || !height || !desc.Width || !desc.Height) {
         hr = E_INVALIDARG;
         goto done;
     }
-    desc.Usage = D3D11_USAGE_STAGING;
-    desc.BindFlags = 0;
-    desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-    desc.MiscFlags = 0;
-    hr = ID3D11Device_CreateTexture2D(decoder->device, &desc, NULL, &staging);
-    if (FAILED(hr)) goto done;
+    output_width = width;
+    output_height = height;
+    if (output_width > desc.Width) {
+        output_width = desc.Width;
+        output_height = (UINT)((uint64_t)height * output_width / width);
+    }
+    if (output_height > desc.Height) {
+        output_height = desc.Height;
+        output_width = (UINT)((uint64_t)width * output_height / height);
+    }
+    output_width &= ~1u;
+    output_height &= ~1u;
+    if (!output_width || !output_height) {
+        hr = E_INVALIDARG;
+        goto done;
+    }
     subresource = view->desc.Texture2D.ArraySlice;
-    hr = ID3D11DeviceContext_Map(decoder->runtime->context, (ID3D11Resource *)staging,
-        subresource, D3D11_MAP_WRITE, 0, &mapped);
-    if (FAILED(hr)) goto done;
-    for (y = 0; y < height; ++y)
-        memcpy((uint8_t *)mapped.pData + (size_t)y * mapped.RowPitch,
-               data + (size_t)y * width, width);
-    for (y = 0; y < height / 2; ++y)
-        memcpy((uint8_t *)mapped.pData + (size_t)(height + y) * mapped.RowPitch,
-               data + (size_t)width * height + (size_t)y * width, width);
-    ID3D11DeviceContext_Unmap(decoder->runtime->context, (ID3D11Resource *)staging, subresource);
-    ID3D11DeviceContext_CopySubresourceRegion(decoder->runtime->context, (ID3D11Resource *)target,
-        subresource, 0, 0, 0, (ID3D11Resource *)staging, subresource, NULL);
+    if (output_width == width && output_height == height &&
+        width == desc.Width && height == desc.Height) {
+        upload_data = (uint8_t *)data;
+    } else {
+        upload_size = (uint64_t)desc.Width * desc.Height * 3 / 2;
+        if (upload_size > UINT_MAX) {
+            hr = E_OUTOFMEMORY;
+            goto done;
+        }
+        if (upload_size > decoder->upload_capacity) {
+            uint8_t *upload = realloc(decoder->upload, (size_t)upload_size);
+            if (!upload) {
+                hr = E_OUTOFMEMORY;
+                goto done;
+            }
+            decoder->upload = upload;
+            decoder->upload_capacity = (UINT)upload_size;
+        }
+        upload_data = decoder->upload;
+        memset(upload_data, 0, (size_t)upload_size);
+    }
+    if (upload_data != data && output_width == width && output_height == height) {
+        for (y = 0; y < height; ++y)
+            memcpy(upload_data + (size_t)y * desc.Width,
+                   data + (size_t)y * width, width);
+        for (y = 0; y < height / 2; ++y)
+            memcpy(upload_data + (size_t)(desc.Height + y) * desc.Width,
+                   data + (size_t)width * height + (size_t)y * width, width);
+    } else if (upload_data != data) {
+        UINT x;
+        UINT source_pairs = width / 2;
+        UINT output_pairs = output_width / 2;
+        uint64_t luma_step = ((uint64_t)width << 32) / output_width;
+        uint64_t chroma_step = ((uint64_t)source_pairs << 32) / output_pairs;
+        for (y = 0; y < output_height; ++y) {
+            const uint8_t *source = data +
+                (size_t)((uint64_t)y * height / output_height) * width;
+            uint8_t *target_row = upload_data + (size_t)y * desc.Width;
+            uint64_t source_x = 0;
+            for (x = 0; x < output_width; ++x) {
+                target_row[x] = source[source_x >> 32];
+                source_x += luma_step;
+            }
+        }
+        for (y = 0; y < output_height / 2; ++y) {
+            const uint8_t *source = data + (size_t)width * height +
+                (size_t)((uint64_t)y * (height / 2) / (output_height / 2)) * width;
+            uint8_t *target_row = upload_data + (size_t)(desc.Height + y) * desc.Width;
+            uint64_t source_x = 0;
+            for (x = 0; x < output_pairs; ++x) {
+                UINT source_pair = (UINT)(source_x >> 32);
+                target_row[x * 2] = source[source_pair * 2];
+                target_row[x * 2 + 1] = source[source_pair * 2 + 1];
+                source_x += chroma_step;
+            }
+        }
+    }
+    ID3D11DeviceContext_UpdateSubresource(decoder->runtime->context,
+        (ID3D11Resource *)target, subresource, NULL, upload_data,
+        desc.Width, desc.Width * desc.Height);
+    ID3D11DeviceContext_Flush(decoder->runtime->context);
     hr = S_OK;
 done:
-    if (staging) ID3D11Texture2D_Release(staging);
     if (target) ID3D11Texture2D_Release(target);
     return hr;
 }
@@ -677,7 +779,6 @@ static HRESULT STDMETHODCALLTYPE context_end_frame(ID3D11VideoContext *iface,
     DecoderBuffer *bitstream;
     HelperFrameMessage packet;
     HelperReply reply;
-    uint8_t *frame = NULL;
     uint8_t parameter_sets[600];
     UINT parameter_size;
     HRESULT hr = S_OK;
@@ -685,6 +786,7 @@ static HRESULT STDMETHODCALLTYPE context_end_frame(ID3D11VideoContext *iface,
     if (!decoder_iface || decoder_iface->lpVtbl != &decoder_vtbl) return E_INVALIDARG;
     bitstream = &decoder->buffers[D3D11_VIDEO_DECODER_BUFFER_BITSTREAM];
     if (!bitstream->data || !bitstream->size) return S_OK;
+    if (decoder->retry_after && GetTickCount64() < decoder->retry_after) return S_OK;
     EnterCriticalSection(&decoder->lock);
     if (!decoder_connect(decoder)) { hr = E_FAIL; goto done; }
     parameter_size = build_h264_parameter_sets(decoder, parameter_sets);
@@ -699,6 +801,7 @@ static HRESULT STDMETHODCALLTYPE context_end_frame(ID3D11VideoContext *iface,
         reply.magic != HELPER_MAGIC || reply.type != HELPER_REPLY || reply.status) {
         closesocket(decoder->helper);
         decoder->helper = INVALID_SOCKET;
+        decoder_backoff(decoder);
         hr = E_FAIL;
         goto done;
     }
@@ -708,18 +811,25 @@ static HRESULT STDMETHODCALLTYPE context_end_frame(ID3D11VideoContext *iface,
             hr = E_FAIL;
             goto disconnect;
         }
-        frame = malloc(reply.payload_size);
-        if (!frame) { hr = E_OUTOFMEMORY; goto done; }
-        if (!recv_all(decoder->helper, frame, reply.payload_size)) { hr = E_FAIL; goto disconnect; }
-        hr = upload_nv12(decoder, frame, reply.width, reply.height);
+        if (reply.payload_size > decoder->frame_capacity) {
+            uint8_t *frame = realloc(decoder->frame, reply.payload_size);
+            if (!frame) { hr = E_OUTOFMEMORY; goto done; }
+            decoder->frame = frame;
+            decoder->frame_capacity = reply.payload_size;
+        }
+        if (!recv_all(decoder->helper, decoder->frame, reply.payload_size)) {
+            hr = E_FAIL;
+            goto disconnect;
+        }
+        hr = upload_nv12(decoder, decoder->frame, reply.width, reply.height);
         if (FAILED(hr)) goto disconnect;
     }
     goto done;
 disconnect:
     closesocket(decoder->helper);
     decoder->helper = INVALID_SOCKET;
+    decoder_backoff(decoder);
 done:
-    free(frame);
     LeaveCriticalSection(&decoder->lock);
     return hr;
 }

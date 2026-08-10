@@ -15,7 +15,9 @@ backup_dir=$state_dir/backup
 libexec_dir=$HOME/.local/libexec
 unit_dir=$config_home/systemd/user
 graphics_driver_state=$state_dir/wine-graphics-driver.state
+remote_backend_state=$state_dir/remote-backend
 remote_backend=${UU_REMOTE_BACKEND:-wayland}
+wine_graphics_driver=x11
 dxvk_version=3.0.2
 dxvk_hash=9c538924110a7cdef871ca36dee218c0774124374ffdeb38af4b76be55bdf7c2
 dxvk_url=https://github.com/doitsujin/dxvk/releases/download/v${dxvk_version}/dxvk-${dxvk_version}.tar.gz
@@ -34,7 +36,8 @@ if cmp -s "$artifact_dir/uu-wayland-capture-helper" \
     capture_helper_changed=false
 fi
 test -d "$uu_bin" || { printf 'UU bin directory not found: %s\n' "$uu_bin" >&2; exit 1; }
-systemctl --user stop uu-x11-remote.service uu-session-guard.service \
+systemctl --user stop uu-x11-remote.service uu-x11-desktop.service \
+    uu-x11-display.service uu-session-guard.service \
     uu-wayland-remote.service uu-wayland-session-guard.service 2>/dev/null || true
 uu_bridge_assert_stopped
 
@@ -75,7 +78,8 @@ if ! test -f "$graphics_driver_state"; then
     fi
 fi
 WINEPREFIX="$wine_prefix" WINEDEBUG=-all wine reg add \
-    'HKCU\Software\Wine\Drivers' /v Graphics /t REG_SZ /d "$remote_backend" /f >/dev/null
+    'HKCU\Software\Wine\Drivers' /v Graphics /t REG_SZ \
+    /d "$wine_graphics_driver" /f >/dev/null
 WINEPREFIX="$wine_prefix" wineserver -k >/dev/null 2>&1 || true
 
 install -m 0644 "$artifact_dir/amfrt64.dll" "$uu_bin/amfrt64.dll"
@@ -106,8 +110,10 @@ install -m 0644 "$project_dir/packaging/uu-wayland-remote.service" \
 install -m 0644 "$project_dir/packaging/uu-wayland-session-guard.service" \
     "$unit_dir/uu-wayland-session-guard.service"
 sha256sum "$uu_bin/amfrt64.dll" "$uu_bin/d3d11.dll" "$uu_bin/d3d11_dxvk.dll" "$uu_bin/dxgi.dll" >"$state_dir/installed.sha256"
+printf '%s\n' "$remote_backend" >"$remote_backend_state"
 systemctl --user daemon-reload
-systemctl --user disable --now uu-x11-remote.service uu-session-guard.service \
+systemctl --user disable --now uu-x11-remote.service uu-x11-desktop.service \
+    uu-x11-display.service uu-session-guard.service \
     uu-wayland-remote.service uu-wayland-session-guard.service 2>/dev/null || true
 if [[ $remote_backend == wayland ]]; then
     systemctl --user enable uu-amf-helper.service uu-wayland-capture.service \

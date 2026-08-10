@@ -6,12 +6,29 @@ prefix=$(readlink -f -- "$prefix")
 interval=${UU_SESSION_GUARD_INTERVAL:-15}
 wine=${WINE_BIN:-/usr/bin/wine}
 bin_dir="$prefix/drive_c/Program Files/Netease/GameViewer/bin"
+snapshot_ready=false
+client_running=false
+webview_running=false
+health_running=false
+server_running=false
 
 process_has_prefix() {
-    local pid=$1 value
-    [[ -r "/proc/$pid/environ" ]] || return 1
-    value=$({ tr '\0' '\n' <"/proc/$pid/environ"; } 2>/dev/null | sed -n 's/^WINEPREFIX=//p' | head -n1)
-    [[ -n $value ]] && [[ $(readlink -f -- "$value" 2>/dev/null || true) == "$prefix" ]]
+    local pid=$1 entry process_prefix result=1
+    {
+        while IFS= read -r -d '' entry; do
+            case $entry in
+                WINEPREFIX=*)
+                    process_prefix=${entry#WINEPREFIX=}
+                    if [[ $process_prefix == "$prefix" ]] ||
+                       [[ $(readlink -f -- "$process_prefix" 2>/dev/null || true) == "$prefix" ]]; then
+                        result=0
+                    fi
+                    break
+                    ;;
+            esac
+        done <"/proc/$pid/environ"
+    } 2>/dev/null
+    return "$result"
 }
 
 image_loaded() {
@@ -20,14 +37,36 @@ image_loaded() {
     grep -Fq -- "$image" "/proc/$pid/maps" 2>/dev/null
 }
 
-prefix_image_running() {
-    local image=$1 pid
+scan_prefix_processes() {
+    local pid cmdline
+    client_running=false
+    webview_running=false
+    health_running=false
+    server_running=false
     for proc in /proc/[0-9]*; do
         pid=${proc##*/}
         process_has_prefix "$pid" || continue
-        image_loaded "$pid" "$image" && return 0
+        cmdline=$(tr '\0' ' ' <"$proc/cmdline" 2>/dev/null || true)
+        if image_loaded "$pid" "$bin_dir/GameViewer.exe" ||
+           [[ $cmdline == *'GameViewer.exe'* && $cmdline != *'msedgewebview2.exe'* ]]; then
+            client_running=true
+        fi
+        [[ $cmdline == *'msedgewebview2.exe'* ]] && webview_running=true
+        [[ $cmdline == *'GameViewerHealthd.exe'* ]] && health_running=true
+        [[ $cmdline == *'GameViewerServer.exe'* ]] && server_running=true
     done
-    return 1
+    snapshot_ready=true
+}
+
+prefix_image_running() {
+    local image=$1
+    [[ $snapshot_ready == true ]] || scan_prefix_processes
+    case $image in
+        "$bin_dir/GameViewer.exe") [[ $client_running == true ]] ;;
+        "$bin_dir/GameViewerHealthd.exe") [[ $health_running == true ]] ;;
+        "$bin_dir/GameViewerServer.exe") [[ $server_running == true ]] ;;
+        *) return 1 ;;
+    esac
 }
 
 start_background_process() {
@@ -46,25 +85,12 @@ start_background_process() {
 }
 
 stale_prefix() {
-    local pid cmdline
-    local has_client=false has_webview=false
-    for proc in /proc/[0-9]*; do
-        pid=${proc##*/}
-        process_has_prefix "$pid" || continue
-        cmdline=$(tr '\0' ' ' <"$proc/cmdline" 2>/dev/null || true)
-        if image_loaded "$pid" "$bin_dir/GameViewer.exe" ||
-           [[ $cmdline == *'GameViewer.exe'* && $cmdline != *'msedgewebview2.exe'* ]]; then
-            has_client=true
-        fi
-        [[ $cmdline == *'msedgewebview2.exe'* ]] && has_webview=true
-    done
-    [[ $has_client == false && $has_webview == true ]]
+    scan_prefix_processes
+    [[ $client_running == false && $webview_running == true ]]
 }
 
-cleanup_once() {
+stop_prefix() {
     local pid cmdline
-    stale_prefix || return 0
-    printf 'uu-session-guard: stale UU WebView session detected; stopping prefix %s\n' "$prefix" >&2
     WINEPREFIX="$prefix" wineserver -k >/dev/null 2>&1 || true
     for proc in /proc/[0-9]*; do
         pid=${proc##*/}
@@ -76,15 +102,28 @@ cleanup_once() {
     done
 }
 
+cleanup_once() {
+    stale_prefix || return 0
+    printf 'uu-session-guard: stale UU WebView session detected; stopping prefix %s\n' "$prefix" >&2
+    stop_prefix
+}
+
 maintain_background_processes() {
     prefix_image_running "$bin_dir/GameViewer.exe" || return 0
     start_background_process GameViewerHealthd.exe
     start_background_process GameViewerServer.exe
 }
 
-trap 'exit 0' INT TERM
-while :; do
-    cleanup_once
-    maintain_background_processes
-    sleep "$interval"
-done
+main() {
+    trap 'exit 0' INT TERM
+    while :; do
+        cleanup_once
+        maintain_background_processes
+        [[ ${UU_SESSION_GUARD_ONCE:-0} == 1 ]] && break
+        sleep "$interval"
+    done
+}
+
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+    main "$@"
+fi

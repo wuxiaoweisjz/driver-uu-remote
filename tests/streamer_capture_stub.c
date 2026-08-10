@@ -5,7 +5,19 @@
 #define CAPTUREBLT 0x40000000
 #endif
 
-BOOL WINAPI RunCapture(void)
+static BOOL close_to(BYTE value, BYTE expected)
+{
+    int difference = (int)value - (int)expected;
+    return difference >= -8 && difference <= 8;
+}
+
+static BOOL expected_pixel(const BYTE *pixel, BYTE blue, BYTE green, BYTE red)
+{
+    return close_to(pixel[0], blue) && close_to(pixel[1], green) &&
+           close_to(pixel[2], red);
+}
+
+static BOOL run_capture(int width, int height, BOOL verify_pattern)
 {
     HDC desktop;
     HDC memory;
@@ -16,8 +28,6 @@ BOOL WINAPI RunCapture(void)
     SIZE_T pixel_size;
     SIZE_T index;
     BOOL has_visible_pixel = FALSE;
-    int width = GetSystemMetrics(SM_CXSCREEN);
-    int height = GetSystemMetrics(SM_CYSCREEN);
     BOOL result;
 
     if (GetTickCount() == ~(DWORD)0)
@@ -50,6 +60,16 @@ BOOL WINAPI RunCapture(void)
             }
         }
         result = has_visible_pixel;
+        if (result && verify_pattern) {
+            const BYTE *top_left = pixels + ((SIZE_T)height / 8 * width + width / 8) * 4u;
+            const BYTE *top_right = pixels + ((SIZE_T)height / 8 * width + width * 7 / 8) * 4u;
+            const BYTE *bottom_left = pixels + ((SIZE_T)height * 7 / 8 * width + width / 8) * 4u;
+            const BYTE *bottom_right = pixels + ((SIZE_T)height * 7 / 8 * width + width * 7 / 8) * 4u;
+            result = expected_pixel(top_left, 40, 40, 220) &&
+                     expected_pixel(top_right, 80, 200, 40) &&
+                     expected_pixel(bottom_left, 220, 90, 40) &&
+                     expected_pixel(bottom_right, 30, 190, 230);
+        }
     }
     DeleteObject(bitmap);
     DeleteDC(memory);
@@ -57,13 +77,33 @@ BOOL WINAPI RunCapture(void)
     return result;
 }
 
+BOOL WINAPI RunCapture(void)
+{
+    return run_capture(GetSystemMetrics(SM_CXSCREEN),
+                       GetSystemMetrics(SM_CYSCREEN), FALSE);
+}
+
+BOOL WINAPI RunQualitySwitchCapture(void)
+{
+    static LONG preset;
+    static const int widths[] = {1920, 1280, 960, 1280};
+    static const int heights[] = {1080, 720, 540, 720};
+    LONG index = InterlockedIncrement(&preset) - 1;
+    index %= (LONG)(sizeof(widths) / sizeof(widths[0]));
+    return run_capture(widths[index], heights[index], TRUE);
+}
+
 BOOL WINAPI RunInput(void)
 {
-    INPUT input;
-    ZeroMemory(&input, sizeof(input));
-    input.type = INPUT_MOUSE;
-    input.mi.dwFlags = MOUSEEVENTF_MOVE;
-    return SendInput(1, &input, sizeof(input)) == 1;
+    INPUT input[2];
+    ZeroMemory(input, sizeof(input));
+    input[0].type = INPUT_MOUSE;
+    input[0].mi.dx = 1;
+    input[0].mi.dwFlags = MOUSEEVENTF_MOVE;
+    input[1].type = INPUT_MOUSE;
+    input[1].mi.dx = -1;
+    input[1].mi.dwFlags = MOUSEEVENTF_MOVE;
+    return SendInput(2, input, sizeof(input[0])) == 2;
 }
 
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved)

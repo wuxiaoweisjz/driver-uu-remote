@@ -104,9 +104,10 @@ void mainCRTStartup(void)
         FAIL("DXVA11 H.264 NV12 capability missing", 24);
     ZeroMemory(&decoder_desc, sizeof(decoder_desc));
     decoder_desc.Guid = D3D11_DECODER_PROFILE_H264_VLD_NOFGT;
-    decoder_desc.SampleWidth = 1920;
-    decoder_desc.SampleHeight = 1080;
+    decoder_desc.SampleWidth = 2560;
+    decoder_desc.SampleHeight = 1440;
     decoder_desc.OutputFormat = DXGI_FORMAT_NV12;
+    config_count = 0;
     if (FAILED(ID3D11VideoDevice_GetVideoDecoderConfigCount(video_device,
             &decoder_desc, &config_count)) || config_count != 1 ||
         FAILED(ID3D11VideoDevice_GetVideoDecoderConfig(video_device,
@@ -130,13 +131,13 @@ void mainCRTStartup(void)
     if (FAILED(ID3D11VideoDevice_CreateVideoDecoderOutputView(video_device,
             (ID3D11Resource *)decode_texture, &view_desc, &decoder_view)))
         FAIL("DXVA11 output view creation failed", 27);
-    bitstream_file = CreateFileW(L"Z:\\tmp\\uu-amf-decode-smoke.h264", GENERIC_READ,
+    bitstream_file = CreateFileW(L"Z:\\tmp\\uu-amf-decode-smoke-1440.h264", GENERIC_READ,
         FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (bitstream_file == INVALID_HANDLE_VALUE ||
         (bitstream_size = GetFileSize(bitstream_file, NULL)) == INVALID_FILE_SIZE || !bitstream_size) {
         if (bitstream_file != INVALID_HANDLE_VALUE) CloseHandle(bitstream_file);
         bitstream_file = INVALID_HANDLE_VALUE;
-        write_text("DXVA11 capability passed; decode sample not provided\r\n");
+        write_text("DXVA11 1440p capability passed; decode sample not provided\r\n");
     } else {
         if (FAILED(ID3D11VideoContext_GetDecoderBuffer(video_context, decoder,
                 D3D11_VIDEO_DECODER_BUFFER_BITSTREAM, &decoder_buffer_size, &decoder_buffer)) ||
@@ -156,7 +157,7 @@ void mainCRTStartup(void)
         if (FAILED(ID3D11VideoContext_SubmitDecoderBuffers(video_context, decoder, 1, &buffer_desc)) ||
             FAILED(ID3D11VideoContext_DecoderEndFrame(video_context, decoder)))
             FAIL("DXVA11 decode submission failed", 31);
-        write_text("DXVA11 Vulkan H.264 decode path passed\r\n");
+        write_text("DXVA11 1440p-to-1080p Vulkan H.264 decode path passed\r\n");
     }
     if (factory->pVtbl->CreateComponent(factory, context, AMFVideoEncoderVCE_AVC, &encoder) != AMF_OK)
         FAIL("CreateComponent failed", 16);

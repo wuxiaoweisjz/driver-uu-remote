@@ -23,6 +23,28 @@ typedef HRESULT (*InstallBridgeFn)(ID3D11Device *, ID3D11DeviceContext *);
 
 static HMODULE dxvk_module;
 
+static BOOL environment_enabled(const WCHAR *name)
+{
+    WCHAR value[8];
+    DWORD length = GetEnvironmentVariableW(name, value, ARRAYSIZE(value));
+    return length > 0 && length < ARRAYSIZE(value) &&
+           lstrcmpiW(value, L"0") != 0 && lstrcmpiW(value, L"false") != 0;
+}
+
+static BOOL controlled_host_process(void)
+{
+    WCHAR path[MAX_PATH];
+    WCHAR *name;
+    DWORD length;
+    if (environment_enabled(L"UU_WAYLAND_CAPTURE_FORCE")) return TRUE;
+    if (environment_enabled(L"UU_WAYLAND_CAPTURE_DISABLE")) return FALSE;
+    length = GetModuleFileNameW(NULL, path, ARRAYSIZE(path));
+    if (!length || length >= ARRAYSIZE(path)) return FALSE;
+    name = path + length;
+    while (name > path && name[-1] != L'\\' && name[-1] != L'/') --name;
+    return lstrcmpiW(name, L"GameViewerServer.exe") == 0;
+}
+
 static DWORD WINAPI wayland_capture_thread(void *opaque)
 {
     return uu_wayland_capture_hook_thread(opaque);
@@ -121,7 +143,8 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved)
     (void)reserved;
     if (reason == DLL_PROCESS_ATTACH) {
         DisableThreadLibraryCalls(instance);
-        if (GetEnvironmentVariableW(L"WAYLAND_DISPLAY", wayland, 2) > 0)
+        if (GetEnvironmentVariableW(L"WAYLAND_DISPLAY", wayland, 2) > 0 &&
+            controlled_host_process())
             CloseHandle(CreateThread(NULL, 0, wayland_capture_thread, NULL, 0, NULL));
     }
     return TRUE;

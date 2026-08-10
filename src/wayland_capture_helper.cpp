@@ -16,6 +16,7 @@
 #include <QImage>
 #include <QMutex>
 #include <QMutexLocker>
+#include <QPainter>
 #include <QRandomGenerator>
 #include <QSaveFile>
 #include <QTimer>
@@ -59,6 +60,9 @@ struct FrameState {
 };
 
 static FrameState frame_state;
+static QMutex kwin_capture_mutex;
+static QByteArray required_auth_token;
+static bool kwin_capture_on_request;
 
 static const char portal_service[] = "org.freedesktop.portal.Desktop";
 static const char portal_path[] = "/org/freedesktop/portal/desktop";
@@ -143,6 +147,95 @@ static void publish_bgra(const uint8_t *source, uint32_t width, uint32_t height,
     frame_state.height = height;
     ++frame_state.generation;
     frame_state.ready.wakeAll();
+}
+
+static bool read_exact_fd(int fd, void *data, size_t size)
+{
+    uint8_t *cursor = static_cast<uint8_t *>(data);
+    while (size) {
+        ssize_t count = read(fd, cursor, size);
+        if (!count) return false;
+        if (count < 0) {
+            if (errno == EINTR) continue;
+            return false;
+        }
+        cursor += count;
+        size -= static_cast<size_t>(count);
+    }
+    return true;
+}
+
+static bool capture_kwin_workspace()
+{
+    constexpr uint64_t max_frame_size = 256u * 1024u * 1024u;
+    int pipe_fds[2] = {-1, -1};
+    QMutexLocker capture_locker(&kwin_capture_mutex);
+    if (pipe(pipe_fds) < 0) return false;
+    QDBusMessage request = QDBusMessage::createMethodCall(
+        QStringLiteral("org.kde.KWin"), QStringLiteral("/org/kde/KWin/ScreenShot2"),
+        QStringLiteral("org.kde.KWin.ScreenShot2"), QStringLiteral("CaptureWorkspace"));
+    QVariantMap options;
+    options.insert(QStringLiteral("include-cursor"), true);
+    options.insert(QStringLiteral("native-resolution"), false);
+    options.insert(QStringLiteral("hide-caller-windows"), false);
+    QDBusUnixFileDescriptor descriptor(pipe_fds[1]);
+    request << options << QVariant::fromValue(descriptor);
+    QDBusMessage response = QDBusConnection::sessionBus().call(
+        request, QDBus::Block, 3000);
+    close(pipe_fds[1]);
+    pipe_fds[1] = -1;
+    if (response.type() == QDBusMessage::ErrorMessage || response.arguments().isEmpty()) {
+        fprintf(stderr, "uu-wayland-capture-helper: KWin screenshot failed: %s\n",
+                response.errorMessage().toUtf8().constData());
+        close(pipe_fds[0]);
+        return false;
+    }
+    const QVariantMap results = qdbus_cast<QVariantMap>(response.arguments().first());
+    const uint32_t width = results.value(QStringLiteral("width")).toUInt();
+    const uint32_t height = results.value(QStringLiteral("height")).toUInt();
+    const uint32_t stride = results.value(QStringLiteral("stride")).toUInt();
+    const uint32_t format = results.value(QStringLiteral("format")).toUInt();
+    const uint64_t raw_size = static_cast<uint64_t>(stride) * height;
+    const uint64_t output_size = static_cast<uint64_t>(width) * height * 4u;
+    if (!width || !height || stride < width * 4u || raw_size > max_frame_size ||
+        output_size > max_frame_size) {
+        close(pipe_fds[0]);
+        return false;
+    }
+    QByteArray raw(static_cast<qsizetype>(raw_size), Qt::Uninitialized);
+    QByteArray pixels(static_cast<qsizetype>(output_size), Qt::Uninitialized);
+    if (!read_exact_fd(pipe_fds[0], raw.data(), static_cast<size_t>(raw_size))) {
+        close(pipe_fds[0]);
+        return false;
+    }
+    close(pipe_fds[0]);
+    for (uint32_t y = 0; y < height; ++y) {
+        const uint8_t *source = reinterpret_cast<const uint8_t *>(raw.constData()) +
+            static_cast<size_t>(y) * stride;
+        uint8_t *destination = reinterpret_cast<uint8_t *>(pixels.data()) +
+            static_cast<size_t>(y) * width * 4u;
+        memcpy(destination, source, static_cast<size_t>(width) * 4u);
+        if (format == 16u || format == 17u || format == 18u) {
+            for (uint32_t x = 0; x < width; ++x) {
+                uint8_t red = destination[x * 4u];
+                destination[x * 4u] = destination[x * 4u + 2u];
+                destination[x * 4u + 2u] = red;
+            }
+        } else if (format != 4u && format != 5u && format != 6u) {
+            fprintf(stderr, "uu-wayland-capture-helper: unsupported KWin format %u\n",
+                    format);
+            return false;
+        }
+    }
+    {
+        QMutexLocker frame_locker(&frame_state.mutex);
+        frame_state.pixels = std::move(pixels);
+        frame_state.width = width;
+        frame_state.height = height;
+        ++frame_state.generation;
+        frame_state.ready.wakeAll();
+    }
+    return true;
 }
 
 class PortalResponse : public QObject {
@@ -609,7 +702,7 @@ private:
     {
         if (eis_) {
             dispatch_eis(0);
-            return pointer_device_ && keyboard_device_;
+            return pointer_device_ && button_device_ && keyboard_device_;
         }
         if (time(nullptr) < eis_retry_after_) return false;
         eis_retry_after_ = time(nullptr) + 5;
@@ -639,9 +732,9 @@ private:
             return false;
         }
         for (int attempt = 0; attempt < 40 &&
-             (!pointer_device_ || !keyboard_device_); ++attempt)
+             (!pointer_device_ || !button_device_ || !keyboard_device_); ++attempt)
             if (!dispatch_eis(50)) break;
-        if (!pointer_device_ || !keyboard_device_) {
+        if (!pointer_device_ || !button_device_ || !keyboard_device_) {
             reset_eis();
             return false;
         }
@@ -1053,6 +1146,36 @@ static int send_all(int fd, const void *data, size_t size)
     return 0;
 }
 
+static int authenticate_connection(int fd)
+{
+    const QByteArray token = qgetenv("UU_CAPTURE_AUTH_TOKEN");
+    CaptureAuthRequest request = {};
+    CaptureAuthReply reply;
+    if (token.isEmpty()) return 0;
+    if (token.size() != CAPTURE_AUTH_TOKEN_SIZE) return -1;
+    request.magic = CAPTURE_MAGIC;
+    request.type = CAPTURE_AUTH_REQUEST;
+    request.protocol_version = CAPTURE_PROTOCOL_VERSION;
+    request.token_size = CAPTURE_AUTH_TOKEN_SIZE;
+    memcpy(request.token, token.constData(), CAPTURE_AUTH_TOKEN_SIZE);
+    if (send_all(fd, &request, sizeof(request)) < 0 ||
+        recv_all(fd, &reply, sizeof(reply)) <= 0 ||
+        reply.magic != CAPTURE_MAGIC || reply.type != CAPTURE_AUTH_REPLY ||
+        reply.protocol_version != CAPTURE_PROTOCOL_VERSION || reply.status)
+        return -1;
+    return 0;
+}
+
+static bool auth_token_equal(const char *token)
+{
+    unsigned int difference = 0;
+    if (required_auth_token.size() != CAPTURE_AUTH_TOKEN_SIZE) return false;
+    for (uint32_t index = 0; index < CAPTURE_AUTH_TOKEN_SIZE; ++index)
+        difference |= static_cast<unsigned char>(token[index]) ^
+            static_cast<unsigned char>(required_auth_token.at(index));
+    return difference == 0;
+}
+
 static int wait_for_frame(unsigned long port, unsigned long timeout_seconds)
 {
     const time_t deadline = time(nullptr) + static_cast<time_t>(timeout_seconds);
@@ -1072,7 +1195,7 @@ static int wait_for_frame(unsigned long port, unsigned long timeout_seconds)
             address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
             address.sin_port = htons(static_cast<uint16_t>(port));
             if (connect(connection, reinterpret_cast<struct sockaddr *>(&address),
-                        sizeof(address)) == 0 &&
+                        sizeof(address)) == 0 && authenticate_connection(connection) == 0 &&
                 send_all(connection, &request, sizeof(request)) == 0 &&
                 recv_all(connection, &reply, sizeof(reply)) > 0 &&
                 reply.magic == CAPTURE_MAGIC && reply.type == CAPTURE_REPLY &&
@@ -1092,18 +1215,67 @@ static int wait_for_frame(unsigned long port, unsigned long timeout_seconds)
     return 1;
 }
 
+static int wait_for_listener(unsigned long port, unsigned long timeout_seconds)
+{
+    const time_t deadline = time(nullptr) + static_cast<time_t>(timeout_seconds);
+    do {
+        int connection = socket(AF_INET, SOCK_STREAM, 0);
+        if (connection >= 0) {
+            struct sockaddr_in address = {};
+            address.sin_family = AF_INET;
+            address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+            address.sin_port = htons(static_cast<uint16_t>(port));
+            if (connect(connection, reinterpret_cast<struct sockaddr *>(&address),
+                        sizeof(address)) == 0) {
+                close(connection);
+                return 0;
+            }
+            close(connection);
+        }
+        sleep(1);
+    } while (time(nullptr) < deadline);
+    fprintf(stderr, "uu-wayland-capture-helper: listener unavailable within %lu seconds\n",
+            timeout_seconds);
+    return 1;
+}
+
 static void handle_client(int client)
 {
+    bool authenticated = required_auth_token.isEmpty();
     for (;;) {
         CaptureRequest request;
         int receive_result = recv_all(client, &request, sizeof(request));
         if (receive_result <= 0) break;
         if (request.magic != CAPTURE_MAGIC ||
             request.protocol_version != CAPTURE_PROTOCOL_VERSION) break;
+        if (request.type == CAPTURE_AUTH_REQUEST) {
+            CaptureAuthRequest auth_request = {};
+            CaptureAuthReply reply = {CAPTURE_MAGIC, CAPTURE_AUTH_REPLY,
+                                      CAPTURE_PROTOCOL_VERSION, 1};
+            auth_request.magic = request.magic;
+            auth_request.type = request.type;
+            auth_request.protocol_version = request.protocol_version;
+            auth_request.token_size = request.reserved;
+            if (auth_request.token_size != CAPTURE_AUTH_TOKEN_SIZE ||
+                recv_all(client, auth_request.token,
+                         sizeof(auth_request.token)) <= 0) break;
+            authenticated = auth_token_equal(auth_request.token);
+            reply.status = authenticated ? 0 : 1;
+            memset(auth_request.token, 0, sizeof(auth_request.token));
+            if (send_all(client, &reply, sizeof(reply)) < 0 || !authenticated) break;
+            continue;
+        }
+        if (!authenticated) break;
         if (request.type == CAPTURE_REQUEST) {
             CaptureReply reply = {CAPTURE_MAGIC, CAPTURE_REPLY, CAPTURE_PROTOCOL_VERSION,
                                   1, 0, 0, 0, 0};
             QByteArray pixels;
+            /* Keep serving the last complete frame when a portal capture
+               tick is late. Returning an empty frame makes the Wine BitBlt
+               hook fall back to GDI and causes visible flicker during quality
+               changes or transient compositor stalls. */
+            if (kwin_capture_on_request)
+                capture_kwin_workspace();
             {
                 QMutexLocker locker(&frame_state.mutex);
                 if (frame_state.pixels.isEmpty())
@@ -1168,14 +1340,18 @@ static void *server_thread(void *opaque)
     for (;;) {
         int client = accept(server, nullptr, nullptr);
         pthread_t thread;
-        struct timeval timeout = {5, 0};
+        struct timeval send_timeout = {5, 0};
         if (client < 0) {
             if (errno == EINTR) continue;
             perror("accept");
             break;
         }
-        setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
-        setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+        /* UU keeps separate capture and input sockets open for the whole
+           session. An idle receive timeout turns the next key or click after
+           five seconds into a stale-socket failure. EOF still releases the
+           thread when the Wine process exits. */
+        setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, &send_timeout,
+                   sizeof(send_timeout));
         if (pthread_create(&thread, nullptr, client_thread,
                            reinterpret_cast<void *>(static_cast<intptr_t>(client))) != 0) {
             close(client);
@@ -1191,6 +1367,7 @@ int main(int argc, char **argv)
 {
     unsigned long port = CAPTURE_DEFAULT_PORT;
     bool test_pattern = false;
+    bool kwin_screenshot = false;
     pthread_t server;
 
     if (argc >= 2 && strcmp(argv[1], "--wait-ready") == 0) {
@@ -1203,11 +1380,32 @@ int main(int argc, char **argv)
         }
         return wait_for_frame(port, timeout_seconds);
     }
+    if (argc >= 2 && strcmp(argv[1], "--wait-listening") == 0) {
+        unsigned long timeout_seconds = 120;
+        if (argc >= 3) port = strtoul(argv[2], nullptr, 10);
+        if (argc >= 4) timeout_seconds = strtoul(argv[3], nullptr, 10);
+        if (!port || port > 65535 || !timeout_seconds) {
+            fprintf(stderr, "invalid listener arguments\n");
+            return 2;
+        }
+        return wait_for_listener(port, timeout_seconds);
+    }
 
-    if (argc >= 2 && strcmp(argv[1], "--test-pattern") == 0) {
-        test_pattern = true;
-        for (int index = 1; index + 1 < argc; ++index) argv[index] = argv[index + 1];
-        --argc;
+    int write_index = 1;
+    for (int index = 1; index < argc; ++index) {
+        if (strcmp(argv[index], "--test-pattern") == 0) {
+            test_pattern = true;
+        } else if (strcmp(argv[index], "--kwin-screenshot") == 0) {
+            kwin_screenshot = true;
+        } else {
+            argv[write_index++] = argv[index];
+        }
+    }
+    argc = write_index;
+    argv[argc] = nullptr;
+    if (test_pattern && kwin_screenshot) {
+        fprintf(stderr, "capture modes are mutually exclusive\n");
+        return 2;
     }
     if (argc == 2) {
         char *end = nullptr;
@@ -1219,10 +1417,19 @@ int main(int argc, char **argv)
     }
     QCoreApplication::setApplicationName(QStringLiteral("uu-wayland-capture-helper"));
     QCoreApplication::setOrganizationName(QStringLiteral("uu-amf-bridge"));
+    QGuiApplication::setDesktopFileName(QStringLiteral("uu-wayland-capture-helper"));
     QGuiApplication application(argc, argv);
     ScreenSaverInhibitor screen_saver_inhibitor;
     PortalCapture portal_capture;
     GStreamerCapture gstreamer_capture;
+    required_auth_token = qgetenv("UU_CAPTURE_AUTH_TOKEN");
+    if (!required_auth_token.isEmpty() &&
+        required_auth_token.size() != CAPTURE_AUTH_TOKEN_SIZE) {
+        fprintf(stderr, "UU_CAPTURE_AUTH_TOKEN must contain exactly %u bytes\n",
+                CAPTURE_AUTH_TOKEN_SIZE);
+        return 2;
+    }
+    kwin_capture_on_request = kwin_screenshot;
     signal(SIGPIPE, SIG_IGN);
     if (pthread_create(&server, nullptr, server_thread,
                        reinterpret_cast<void *>(static_cast<uintptr_t>(port))) != 0) {
@@ -1232,9 +1439,21 @@ int main(int argc, char **argv)
     pthread_detach(server);
     if (test_pattern) {
         QImage pattern(1920, 1080, QImage::Format_ARGB32);
-        pattern.fill(QColor(24, 132, 76));
+        QPainter painter(&pattern);
+        painter.fillRect(0, 0, 960, 540, QColor(220, 40, 40));
+        painter.fillRect(960, 0, 960, 540, QColor(40, 200, 80));
+        painter.fillRect(0, 540, 960, 540, QColor(40, 90, 220));
+        painter.fillRect(960, 540, 960, 540, QColor(230, 190, 30));
+        painter.end();
         publish_image(pattern);
         fprintf(stderr, "uu-wayland-capture-helper using synthetic test frame\n");
+    } else if (kwin_screenshot) {
+        if (!QDBusConnection::sessionBus().isConnected() ||
+            !capture_kwin_workspace()) {
+            fprintf(stderr, "uu-wayland-capture-helper: KWin capture unavailable\n");
+            return 1;
+        }
+        fprintf(stderr, "uu-wayland-capture-helper using KWin greeter capture\n");
     } else {
         int pipewire_fd = -1;
         uint32_t node_id = 0;

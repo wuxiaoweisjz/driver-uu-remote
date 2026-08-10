@@ -8,9 +8,12 @@
 #define CAPTURE_REPLY 2u
 #define CAPTURE_INPUT_REQUEST 3u
 #define CAPTURE_INPUT_REPLY 4u
+#define CAPTURE_AUTH_REQUEST 5u
+#define CAPTURE_AUTH_REPLY 6u
 #define CAPTURE_PROTOCOL_VERSION 2u
 #define CAPTURE_DEFAULT_PORT 47892u
 #define CAPTURE_MAX_INPUT_EVENTS 64u
+#define CAPTURE_AUTH_TOKEN_SIZE 64u
 
 #define CAPTURE_INPUT_MOUSE 0u
 #define CAPTURE_INPUT_KEYBOARD 1u
@@ -58,6 +61,21 @@ typedef struct CaptureInputReply {
     uint32_t status;
     uint32_t accepted_count;
 } CaptureInputReply;
+
+typedef struct CaptureAuthRequest {
+    uint32_t magic;
+    uint32_t type;
+    uint32_t protocol_version;
+    uint32_t token_size;
+    char token[CAPTURE_AUTH_TOKEN_SIZE];
+} CaptureAuthRequest;
+
+typedef struct CaptureAuthReply {
+    uint32_t magic;
+    uint32_t type;
+    uint32_t protocol_version;
+    uint32_t status;
+} CaptureAuthReply;
 #pragma pack(pop)
 
 #endif
