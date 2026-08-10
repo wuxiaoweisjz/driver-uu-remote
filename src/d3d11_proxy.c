@@ -34,20 +34,16 @@ static BOOL environment_enabled(const WCHAR *name)
 static BOOL controlled_host_process(void)
 {
     WCHAR path[MAX_PATH];
-    WCHAR role[16];
     WCHAR *name;
     DWORD length;
-    length = GetEnvironmentVariableW(L"UU_REMOTE_ROLE", role, ARRAYSIZE(role));
-    if (length > 0 && length < ARRAYSIZE(role) &&
-        lstrcmpiW(role, L"controller") == 0)
-        return FALSE;
     if (environment_enabled(L"UU_WAYLAND_CAPTURE_FORCE")) return TRUE;
     if (environment_enabled(L"UU_WAYLAND_CAPTURE_DISABLE")) return FALSE;
     length = GetModuleFileNameW(NULL, path, ARRAYSIZE(path));
     if (!length || length >= ARRAYSIZE(path)) return FALSE;
     name = path + length;
     while (name > path && name[-1] != L'\\' && name[-1] != L'/') --name;
-    return lstrcmpiW(name, L"GameViewerServer.exe") == 0;
+    return lstrcmpiW(name, L"GameViewerServer.exe") == 0 ||
+           lstrcmpiW(name, L"GameViewerServer.real.exe") == 0;
 }
 
 static DWORD WINAPI wayland_capture_thread(void *opaque)
