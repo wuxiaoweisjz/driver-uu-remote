@@ -524,9 +524,8 @@ public:
         g_object_set(source, "fd", pipewire_fd, "path", node.constData(),
                      "client-name", "UU Wayland Capture", "do-timestamp", TRUE, nullptr);
         GstCaps *caps = gst_caps_new_simple("video/x-raw", "format", G_TYPE_STRING,
-                                            "BGRA", "framerate", GST_TYPE_FRACTION,
-                                            15, 1, nullptr);
-        g_object_set(sink_, "caps", caps, "emit-signals", FALSE, "max-buffers", 2u,
+                                            "BGRA", nullptr);
+        g_object_set(sink_, "caps", caps, "emit-signals", FALSE, "max-buffers", 1u,
                      "drop", TRUE, "sync", FALSE, nullptr);
         gst_caps_unref(caps);
 
@@ -602,8 +601,9 @@ public:
     uint32_t send(const CaptureInputEvent *events, uint32_t count)
     {
         QMutexLocker locker(&mutex_);
-        bool use_eis = ensure_eis();
-        if (!use_eis && !ensure_uinput()) return 0;
+        bool use_uinput = ensure_uinput();
+        bool use_eis = !use_uinput && ensure_eis();
+        if (!use_uinput && !use_eis) return 0;
         uint32_t accepted = 0;
         for (; accepted < count; ++accepted) {
             bool ok = events[accepted].type == CAPTURE_INPUT_MOUSE

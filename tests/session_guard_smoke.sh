@@ -32,6 +32,19 @@ if [[ $cleanup_called != stop ]]; then
     exit 1
 fi
 
+stopped_upgrader=
+scan_prefix_processes() {
+    snapshot_ready=true
+    upgrade_pids=(4242)
+}
+process_elapsed_seconds() { printf '121\n'; }
+stop_stale_upgrader() { stopped_upgrader=$1; }
+cleanup_stale_upgrades
+if [[ $stopped_upgrader != 4242 ]]; then
+    printf 'stale UU upgrader was not stopped\n' >&2
+    exit 1
+fi
+
 starts=()
 prefix_image_running() { [[ $1 == *GameViewer.exe ]]; }
 start_background_process() { starts+=("$1"); }

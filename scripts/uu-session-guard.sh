@@ -4,6 +4,7 @@ set -euo pipefail
 prefix=${UU_WINEPREFIX:-${WINEPREFIX:-${XDG_DATA_HOME:-$HOME/.local/share}/uuyc-wine/wineprefix}}
 prefix=$(readlink -f -- "$prefix")
 interval=${UU_SESSION_GUARD_INTERVAL:-15}
+upgrade_timeout=${UU_UPGRADE_MAX_SECONDS:-120}
 wine=${WINE_BIN:-/usr/bin/wine}
 bin_dir="$prefix/drive_c/Program Files/Netease/GameViewer/bin"
 snapshot_ready=false
@@ -11,6 +12,7 @@ client_running=false
 webview_running=false
 health_running=false
 server_running=false
+upgrade_pids=()
 
 process_has_prefix() {
     local pid=$1 entry process_prefix result=1
@@ -43,6 +45,7 @@ scan_prefix_processes() {
     webview_running=false
     health_running=false
     server_running=false
+    upgrade_pids=()
     for proc in /proc/[0-9]*; do
         pid=${proc##*/}
         process_has_prefix "$pid" || continue
@@ -54,8 +57,31 @@ scan_prefix_processes() {
         [[ $cmdline == *'msedgewebview2.exe'* ]] && webview_running=true
         [[ $cmdline == *'GameViewerHealthd.exe'* ]] && health_running=true
         [[ $cmdline == *'GameViewerServer.exe'* ]] && server_running=true
+        [[ $cmdline == source=upgrade\ * ]] && upgrade_pids+=("$pid")
     done
     snapshot_ready=true
+}
+
+process_elapsed_seconds() {
+    ps -o etimes= -p "$1" 2>/dev/null | tr -d ' '
+}
+
+stop_stale_upgrader() {
+    local pid=$1
+    kill "$pid" 2>/dev/null || true
+}
+
+cleanup_stale_upgrades() {
+    local pid elapsed
+    [[ $snapshot_ready == true ]] || scan_prefix_processes
+    for pid in "${upgrade_pids[@]}"; do
+        elapsed=$(process_elapsed_seconds "$pid")
+        [[ $elapsed =~ ^[0-9]+$ ]] || continue
+        (( elapsed >= upgrade_timeout )) || continue
+        printf 'uu-session-guard: stopping stale UU upgrader pid %s after %ss\n' \
+            "$pid" "$elapsed" >&2
+        stop_stale_upgrader "$pid"
+    done
 }
 
 prefix_image_running() {
@@ -85,7 +111,7 @@ start_background_process() {
 }
 
 stale_prefix() {
-    scan_prefix_processes
+    [[ $snapshot_ready == true ]] || scan_prefix_processes
     [[ $client_running == false && $webview_running == true ]]
 }
 
@@ -121,6 +147,8 @@ maintain_background_processes() {
 main() {
     trap 'exit 0' INT TERM
     while :; do
+        snapshot_ready=false
+        cleanup_stale_upgrades
         cleanup_once
         maintain_background_processes
         [[ ${UU_SESSION_GUARD_ONCE:-0} == 1 ]] && break
