@@ -20,6 +20,8 @@
 #include <QRandomGenerator>
 #include <QSaveFile>
 #include <QTimer>
+
+#include <atomic>
 #include <QVariantMap>
 #include <QWaitCondition>
 
@@ -63,6 +65,7 @@ static FrameState frame_state;
 static QMutex kwin_capture_mutex;
 static QByteArray required_auth_token;
 static bool kwin_capture_on_request;
+static std::atomic_uint active_client_count{0};
 
 static const char portal_service[] = "org.freedesktop.portal.Desktop";
 static const char portal_path[] = "/org/freedesktop/portal/desktop";
@@ -539,11 +542,33 @@ public:
         GstBus *bus = gst_element_get_bus(pipeline_);
         gst_bus_set_sync_handler(bus, bus_message, nullptr, nullptr);
         gst_object_unref(bus);
-        if (gst_element_set_state(pipeline_, GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE) {
-            fprintf(stderr, "uu-wayland-capture-helper: failed to start GStreamer capture\n");
+        if (gst_element_set_state(pipeline_, GST_STATE_PAUSED) == GST_STATE_CHANGE_FAILURE) {
+            fprintf(stderr, "uu-wayland-capture-helper: failed to prepare GStreamer capture\n");
             return false;
         }
         return true;
+    }
+
+    bool resume()
+    {
+        QMutexLocker locker(&state_mutex_);
+        if (!pipeline_) return true;
+        if (playing_) return true;
+        if (gst_element_set_state(pipeline_, GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE) {
+            fprintf(stderr, "uu-wayland-capture-helper: failed to resume GStreamer capture\n");
+            return false;
+        }
+        playing_ = true;
+        return true;
+    }
+
+    void suspend()
+    {
+        QMutexLocker locker(&state_mutex_);
+        if (!pipeline_) return;
+        if (!playing_) return;
+        gst_element_set_state(pipeline_, GST_STATE_PAUSED);
+        playing_ = false;
     }
 
     ~GStreamerCapture()
@@ -593,7 +618,11 @@ private:
 
     GstElement *pipeline_ = nullptr;
     GstElement *sink_ = nullptr;
+    QMutex state_mutex_;
+    bool playing_ = false;
 };
+
+static GStreamerCapture *gstreamer_capture_instance;
 
 class InputBridge {
 public:
@@ -1276,6 +1305,8 @@ static void handle_client(int client)
                changes or transient compositor stalls. */
             if (kwin_capture_on_request)
                 capture_kwin_workspace();
+            else if (!gstreamer_capture_instance || !gstreamer_capture_instance->resume())
+                break;
             {
                 QMutexLocker locker(&frame_state.mutex);
                 if (frame_state.pixels.isEmpty())
@@ -1311,8 +1342,12 @@ static void handle_client(int client)
 static void *client_thread(void *opaque)
 {
     int client = static_cast<int>(reinterpret_cast<intptr_t>(opaque));
+    active_client_count.fetch_add(1, std::memory_order_relaxed);
     handle_client(client);
     close(client);
+    if (active_client_count.fetch_sub(1, std::memory_order_relaxed) == 1 &&
+        gstreamer_capture_instance)
+        gstreamer_capture_instance->suspend();
     return nullptr;
 }
 
@@ -1422,6 +1457,7 @@ int main(int argc, char **argv)
     ScreenSaverInhibitor screen_saver_inhibitor;
     PortalCapture portal_capture;
     GStreamerCapture gstreamer_capture;
+    gstreamer_capture_instance = &gstreamer_capture;
     required_auth_token = qgetenv("UU_CAPTURE_AUTH_TOKEN");
     if (!required_auth_token.isEmpty() &&
         required_auth_token.size() != CAPTURE_AUTH_TOKEN_SIZE) {
